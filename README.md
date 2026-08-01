@@ -18,6 +18,18 @@ Sentinel focuses on detailed diagnostics, low overhead, and extensibility.
 
 ---
 
+## Scope of this document
+
+This README describes the **full product vision**. The current milestone, **version 0.1**, is a
+deliberately narrow vertical slice: **HTTP/HTTPS only**, but with the complete runtime skeleton
+(configuration → scheduler → probe → result store → `/metrics`) and full HTTP phase timing.
+
+Everything else described below — DNS/TCP/ICMP probes, histograms, templates, hot reload,
+JSONPath/XPath validation, authentication, a debug API, distributed agents — is planned for later
+versions. See `Roadmap.md` for the version breakdown.
+
+---
+
 ## Motivation
 
 Prometheus is widely used for infrastructure monitoring. For synthetic monitoring, many installations
@@ -70,11 +82,16 @@ This immediately identifies backend latency instead of only reporting an unavail
 
 Sentinel uses:
 
-- connection pooling
-- reusable HTTP transports
-- configurable worker pools
-- asynchronous scheduling
+- bounded worker concurrency (semaphore-limited execution)
+- asynchronous scheduling decoupled from Prometheus scrapes
 - efficient Go concurrency
+
+Note on connections: for accurate diagnostics, monitoring probes deliberately use a
+**fresh connection per run** rather than pooling/reusing connections. A reused connection
+skips the DNS, TCP, and TLS phases entirely, which would make the per-phase timing metrics
+inconsistent (sometimes present, sometimes zero). Since exposing those phases is the whole
+point, connection reuse is intentionally *not* used for probes. Optional per-target reuse may
+be added later for callers who prefer throughput over phase visibility.
 
 ### Extensible architecture
 
@@ -189,12 +206,12 @@ sentinel_http_download_duration_seconds
 
 - HTTP
 - HTTPS
+
+### Planned (0.2+)
+
 - TCP
 - DNS
 - ICMP
-
-### Planned
-
 - SMTP
 - IMAP
 - POP3

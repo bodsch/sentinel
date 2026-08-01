@@ -48,7 +48,10 @@ sentinel_tls_certificate_expiry_timestamp
 
 ## Common Labels
 
-Every probe metric may contain:
+Labels come from a **fixed, validated set** — this exact list. Arbitrary user tags are *not* turned
+into labels in 0.1: a `tags:` key outside this set is rejected at config validation time, which
+protects against accidental cardinality explosions. Free-form tags-as-labels (with sanitizing and
+governance) are a later feature.
 
 | Label| Description |
 | :--- | :---- |
@@ -134,12 +137,31 @@ Useful for detecting stale probes.
 
 ---
 
-## Error Classification
+## Skipped Probes
 
-Failures are represented through a stable reason metric.
+Counter of probe runs that were skipped because a previous run of the same target was still in
+flight (overload protection, see the scheduler). A rising rate indicates the interval is too tight
+for how long the target takes to probe.
 
 ```
-sentinel_probe_failure_reason
+sentinel_probe_skipped_total
+```
+
+Type:
+
+```
+Counter
+```
+
+---
+
+## Error Classification
+
+The primary alerting signal is always `sentinel_probe_success` (see above). The failure *reason*
+is exposed separately as an **info metric**:
+
+```
+sentinel_probe_failure_info
 ```
 
 Labels:
@@ -148,20 +170,26 @@ Labels:
 reason
 ```
 
-Possible values:
+Possible values (0.1 set):
 
 ```
 dns_error
 
 tcp_timeout
 
+connection_refused
+
 tls_error
 
 certificate_expired
 
+certificate_invalid
+
 redirect_loop
 
 redirect_limit_exceeded
+
+downgrade
 
 http_status_error
 
@@ -173,11 +201,19 @@ timeout
 Example:
 
 ```
-sentinel_probe_failure_reason{
+sentinel_probe_failure_info{
     target="homepage",
     reason="redirect_loop"
 } 1
 ```
+
+**Vanishing semantics (important).** The reason is *not* modelled as a fixed metric whose label
+value changes over time — that would leave orphaned time series (yesterday's `tls_error=1` lingering
+next to today's `dns_error=1`). Instead the info series is emitted **only while the probe is
+failing** and is **not emitted at all on success**. Because the state collector reads the result
+store at scrape time, this is trivial: on success it simply skips the series. At any moment a
+target has exactly one reason series, or none. Alert on `sentinel_probe_success == 0`; use the
+info series to explain *why*.
 
 ---
 
@@ -426,6 +462,11 @@ Values:
 ---
 
 ## Histograms
+
+> **Version note:** Histograms are a **0.2** feature. Version 0.1 exposes the current-value state
+> gauges above (read live at scrape time). Histograms accumulate *observations* and must be fed at
+> probe time via `.Observe()` — a different lifecycle from the scrape-time state collector — so they
+> are introduced alongside that mechanism in 0.2.
 
 For latency analysis Sentinel should expose histograms.
 

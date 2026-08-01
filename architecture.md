@@ -16,6 +16,11 @@ The architecture is optimized for:
 - detailed diagnostics
 - extensibility
 
+> **Version scope:** This document describes the target architecture. Version 0.1 implements the
+> HTTP/HTTPS path end-to-end with the full skeleton below, sized for **hundreds of targets**.
+> Components marked as future (hot reload, debug API, non-HTTP probes, histograms, a central
+> scheduling queue) are deferred to later versions. See `Roadmap.md`.
+
 ---
 
 ## Component Overview
@@ -110,7 +115,7 @@ This prevents unnecessary load spikes.
 
 ## Worker Pool
 
-The worker pool executes probes concurrently.
+The worker pool bounds how many probes run concurrently.
 
 Design goals:
 
@@ -119,25 +124,25 @@ Design goals:
 - cancellation support
 - timeout handling
 
-Example:
+**0.1 implementation — ticker + semaphore.** Due timing and execution are separated. Each target
+runs its own goroutine with a `time.Ticker` (jittered by an initial offset) that signals when the
+target is due. Actual execution passes through a semaphore (`chan struct{}` of capacity N), which
+is the hard cap on *simultaneous* probes. This gives bounded concurrency without a full central
+scheduling queue, which is deferred until a larger scale demands it.
 
 ```
-Scheduler
-
-    |
-    v
-
-Probe Queue
-
-    |
-    +---- Worker 1
-    |
-    +---- Worker 2
-    |
-    +---- Worker 3
+Target A ticker ─┐
+Target B ticker ─┤
+Target C ticker ─┼──► semaphore (cap N) ──► probe execution
+      ...        │
+Target Z ticker ─┘
 ```
 
-Workers should never create uncontrolled goroutines.
+Overload rules: at most one in-flight probe per target (an overlapping tick is skipped, never
+queued); a due probe waits briefly on the semaphore rather than being dropped immediately; every
+skipped run is counted (`sentinel_probe_skipped_total`).
+
+Workers never create uncontrolled goroutines.
 
 ---
 
@@ -159,18 +164,26 @@ Collect Metrics
 Store Result
 ```
 
-Every probe returns a normalized result:
+Every probe returns a normalized, **typed** result:
 
-```
-type ProbeResult struct {
-    Success   bool
-    Duration time.Duration
-    Error    error
-    Metrics  map[string]float64
+```go
+type Result struct {
+    Success       bool
+    FailureReason FailureReason // stable enum, never a free-form string
+    Duration      time.Duration // total, across all redirect hops
+    Timings       Timings       // typed per-phase struct (DNS/TCP/TLS/TTFB/Download)
+    Diagnostics   Diagnostics   // protocol-specific detail (e.g. HTTP redirect chain, TLS cert)
+    Timestamp     time.Time
 }
 ```
 
-Protocol-specific implementations only handle their own execution logic.
+A previous draft modelled metrics as an untyped `map[string]float64`. That was dropped in favour
+of a typed result: it gives compile-time safety and lets the rich HTTP diagnostics (redirect
+chain, TLS certificate info, phase timings) live in properly typed fields instead of stringly
+keyed floats.
+
+Protocol-specific implementations only handle their own execution logic and populate their own
+`Diagnostics` value.
 
 ---
 
@@ -212,10 +225,9 @@ Metrics Collection
 
 The probe uses:
 
-- shared HTTP transports
-- connection pooling
-- HTTP tracing
-- configurable timeouts
+- a fresh connection per run (no pooling — see below), so every DNS/TCP/TLS phase is measured
+- HTTP tracing (`net/http/httptrace`) for per-phase timing
+- configurable total timeout
 
 ---
 
@@ -349,9 +361,23 @@ The metrics exporter exposes:
 
 Responsibilities:
 
-- converting internal state into Prometheus metrics
+- serving `promhttp.Handler` over a dedicated (non-default) registry
 - managing labels
 - avoiding high-cardinality data
+
+**Extensibility model — self-registering collectors.** The exporter itself knows nothing about
+individual protocols. Each protocol package ships its own `prometheus.Collector` and registers it
+with the shared registry. Adding a new protocol therefore requires *no* change to the exporter —
+it just contributes another collector. The trade-off is a deliberate coupling of protocol packages
+to `client_golang`, chosen because it is the idiomatic Prometheus approach.
+
+**Hybrid metric lifecycle.** Two metric natures are handled differently:
+
+- *State metrics* (probe success, current TTFB gauge, certificate remaining days, failure reason)
+  are read **live at scrape time** by a custom collector that pulls from the result store. This
+  keeps them always current with no in-process history and no staleness bookkeeping.
+- *Distribution metrics* (histograms) are classic `prometheus.Histogram` objects that the probe
+  feeds via `.Observe()` at run time. These arrive in 0.2; version 0.1 exposes state gauges only.
 
 Large diagnostic information is not exposed as labels.
 

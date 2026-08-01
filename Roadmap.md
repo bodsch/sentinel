@@ -10,61 +10,73 @@ The primary goal is a reliable synthetic monitoring engine with excellent Promet
 
 ---
 
-## Version 0.1 - Core Monitoring Engine
+## Version 0.1 - Core Monitoring Engine (HTTP slice)
 
 ### Goal
 
-Create a production-ready monitoring daemon capable of replacing common Blackbox Exporter use cases.
+Create a production-ready monitoring daemon for the **HTTP/HTTPS** use case, with the complete
+runtime skeleton in place so further protocols slot in without reworking the core. Version 0.1 is a
+deliberately narrow vertical slice — one protocol done end-to-end, not several done partially.
+
+> Status: design decided, implementation pending. The list below is the **planned 0.1 scope**, not
+> yet-shipped functionality.
 
 ---
 
-### Core Runtime
+### Core Runtime (scope)
 
-Implemented:
-
-- Go application structure
-- configuration loading
-- configuration validation
-- scheduler
-- worker pool
-- probe lifecycle management
-- timeout handling
-- graceful shutdown
+- Go application structure (`cmd/sentinel` + `internal/*` + `pkg/version`)
+- configuration loading (`defaults` + `targets`, no templates) and validation
+- `--validate` dry-run and fail-fast startup
+- scheduler: ticker-per-target + semaphore-bounded execution, skip-if-running
+- probe lifecycle management with a typed `Result` and `FailureReason` enum
+- single total timeout per target, full context cancellation
+- graceful shutdown (drain, default 10s; in-flight probes discarded)
+- structured logging (`log/slog`, JSON, fixed field schema)
+- `Clock` interface for deterministic scheduler tests
 
 ---
 
-### HTTP Monitoring
+### HTTP Monitoring (scope)
 
-Implemented:
-
-- HTTP/HTTPS checks
-- HTTP GET requests
-- status code validation
-- TLS validation
-- redirect handling
-- redirect loop detection
-- connection reuse
-- HTTP timing instrumentation
+- HTTP/HTTPS checks, `GET` and `HEAD`
+- fresh connection per run (full, comparable phase timings; no connection reuse)
+- status code / body regex / header validators (via a `Validator` interface)
+- `max_body_bytes` cap (default 1 MB)
+- redirect handling: follow up to `max_redirects`, loop detection, HTTPS→HTTP downgrade detection
+- TLS diagnostics: expiry, hostname match, remaining days (manual certificate inspection)
+- HTTP timing instrumentation via `net/http/httptrace`
 
 Metrics:
 
-- total duration
-- DNS duration
-- TCP duration
-- TLS duration
-- TTFB
-- download duration
+- total duration (across all redirect hops)
+- DNS / TCP / TLS / TTFB / download duration (final hop)
+
+---
+
+### Prometheus Integration (scope)
+
+- `/metrics` via a dedicated registry, plus `/healthz` and `/readyz` on `:8080`
+- self-registering collectors; state read live at scrape time
+- stable metric naming, fixed label set, error classification (`probe_failure_info`)
+- `sentinel_build_info`
+- **state gauges only** (histograms are 0.2)
+
+---
+
+## Version 0.2 - Advanced Diagnostics & More Protocols
+
+### Goal
+
+Increase diagnostic capabilities and expand beyond HTTP.
 
 ---
 
 ### DNS Monitoring
 
-Implemented:
+Planned:
 
-- A records
-- AAAA records
-- MX records
-- TXT records
+- A / AAAA / MX / TXT records
 - response validation
 - query timing
 
@@ -72,7 +84,7 @@ Implemented:
 
 ### TCP Monitoring
 
-Implemented:
+Planned:
 
 - TCP connection checks
 - timeout handling
@@ -82,31 +94,22 @@ Implemented:
 
 ### ICMP Monitoring
 
-Implemented:
+Planned:
 
 - reachability checks
 - latency measurement
 - packet loss measurement
+- (note: raw sockets require elevated privileges / `CAP_NET_RAW`; platform-specific handling)
 
 ---
 
-### Prometheus Integration
+### Metrics & Runtime
 
-Implemented:
+Planned:
 
-- `/metrics`
-- stable metric naming
-- label handling
-- histogram support
-- error classification
-
----
-
-## Version 0.2 - Advanced Diagnostics
-
-### Goal
-
-Increase diagnostic capabilities.
+- histogram support (latency distributions, fed at probe time)
+- in-probe retry with retry metrics
+- configuration templates and hot reload
 
 ---
 
@@ -371,8 +374,8 @@ Advantages:
 
 - predictable execution
 - better performance
-- connection reuse
-- richer diagnostics
+- bounded, controllable concurrency
+- richer diagnostics (per-phase timing)
 - easier scaling
 
 ---
