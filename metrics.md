@@ -1,0 +1,572 @@
+# Sentinel Metrics Specification
+
+## Overview
+
+Sentinel exposes monitoring data through a Prometheus-compatible metrics endpoint.
+
+The metric design follows these principles:
+
+- stable metric names
+- predictable labels
+- low cardinality
+- detailed diagnostics outside of Prometheus labels
+- support for alerting and dashboards
+
+Endpoint:
+
+```
+GET /metrics
+```
+
+---
+
+## Naming Convention
+
+All metrics use the prefix:
+
+```
+sentinel_
+```
+
+The general structure:
+
+```
+sentinel_<component>_<measurement>
+```
+
+Examples:
+
+```
+sentinel_probe_success
+
+sentinel_http_ttfb_seconds
+
+sentinel_tls_certificate_expiry_timestamp
+```
+
+---
+
+## Common Labels
+
+Every probe metric may contain:
+
+| Label| Description |
+| :--- | :---- |
+| "target"| configured probe name         |
+| "type"| probe type                      |
+| "environment"| deployment environment   |
+| "location"| probe location              |
+| "service"| monitored service            |
+
+Example:
+
+```
+sentinel_probe_success{
+    target="homepage",
+    type="http",
+    environment="production"
+}
+```
+
+---
+
+## Probe State Metrics
+
+### Probe Success
+
+Indicates whether the last probe execution succeeded.
+
+```
+sentinel_probe_success
+```
+
+Values:
+
+```
+1 = successful
+
+0 = failed
+```
+
+Example:
+
+```
+sentinel_probe_success{
+    target="homepage"
+} 1
+```
+
+---
+
+## Probe Duration
+
+Total execution time.
+
+```
+sentinel_probe_duration_seconds
+```
+
+Type:
+
+```
+Gauge
+```
+
+Example:
+
+```
+sentinel_probe_duration_seconds{
+    target="homepage"
+} 0.152
+```
+
+---
+
+## Last Successful Probe
+
+Unix timestamp of the last successful execution.
+
+```
+sentinel_probe_last_success_timestamp_seconds
+```
+
+Useful for detecting stale probes.
+
+---
+
+## Error Classification
+
+Failures are represented through a stable reason metric.
+
+```
+sentinel_probe_failure_reason
+```
+
+Labels:
+
+```
+reason
+```
+
+Possible values:
+
+```
+dns_error
+
+tcp_timeout
+
+tls_error
+
+certificate_expired
+
+redirect_loop
+
+redirect_limit_exceeded
+
+http_status_error
+
+validation_failed
+
+timeout
+```
+
+Example:
+
+```
+sentinel_probe_failure_reason{
+    target="homepage",
+    reason="redirect_loop"
+} 1
+```
+
+---
+
+## HTTP Metrics
+
+### HTTP Status Code
+
+```
+sentinel_http_status_code
+```
+
+Example:
+
+```
+sentinel_http_status_code{
+    target="homepage"
+} 200
+```
+
+---
+
+## HTTP Timing Breakdown
+
+Sentinel separates HTTP phases.
+
+### DNS Lookup
+
+```
+sentinel_http_dns_duration_seconds
+```
+
+---
+
+### TCP Connection
+
+```
+sentinel_http_tcp_connect_duration_seconds
+```
+
+---
+
+###TLS Handshake
+
+```
+sentinel_http_tls_handshake_duration_seconds
+```
+
+---
+
+### Time To First Byte
+
+The first byte received after sending the request.
+
+```
+sentinel_http_ttfb_seconds
+
+```
+This is one of the most important application performance indicators.
+
+Example:
+
+```
+sentinel_http_ttfb_seconds{
+    target="api"
+} 0.084
+```
+
+---
+
+### Response Download
+
+```
+sentinel_http_download_duration_seconds
+```
+
+---
+
+### Response Size
+
+```
+sentinel_http_response_size_bytes
+```
+
+---
+
+### Transfer Rate
+
+```
+sentinel_http_transfer_rate_bytes_per_second
+```
+
+---
+
+## Redirect Metrics
+
+### Redirect Count
+
+```
+sentinel_http_redirects_total
+```
+
+---
+
+### Redirect Loop
+
+```
+sentinel_http_redirect_loop
+```
+
+Values:
+
+```
+1 = loop detected
+
+0 = normal
+```
+
+---
+
+### Redirect Limit Exceeded
+
+```
+sentinel_http_redirect_limit_exceeded
+```
+
+---
+
+### Final URL
+
+Not exported as a normal label.
+
+Reason:
+
+URLs create unbounded cardinality.
+
+Instead:
+
+- available through Debug API
+- available in structured logs
+
+---
+
+## TLS Metrics
+
+### Certificate Expiration
+
+Unix timestamp:
+
+```
+sentinel_tls_certificate_expiry_timestamp_seconds
+```
+
+---
+
+### Certificate Remaining Days
+
+Convenience metric:
+
+```
+sentinel_tls_certificate_remaining_days
+```
+Example:
+
+```
+sentinel_tls_certificate_remaining_days{
+    target="homepage"
+} 42
+```
+
+---
+
+### Certificate Validation
+
+```
+sentinel_tls_certificate_valid
+```
+
+Values:
+
+```
+1 = valid
+
+0 = invalid
+```
+
+---
+
+## DNS Metrics
+
+### DNS Query Duration
+
+```
+sentinel_dns_query_duration_seconds
+```
+
+---
+
+### DNS Response Code
+
+```
+sentinel_dns_response_code
+```
+
+Examples:
+
+```
+0  NOERROR
+
+3  NXDOMAIN
+```
+
+---
+
+### DNS Record Count
+
+```
+sentinel_dns_answer_count
+```
+
+---
+
+## TCP Metrics
+
+### TCP Connect Duration
+
+```
+sentinel_tcp_connect_duration_seconds
+```
+
+---
+
+### TCP Availability
+
+```
+sentinel_tcp_available
+```
+
+Values:
+
+```
+1 = reachable
+
+0 = unreachable
+```
+
+---
+
+## Histograms
+
+For latency analysis Sentinel should expose histograms.
+
+Example:
+
+```
+sentinel_http_ttfb_seconds_bucket
+```
+
+Recommended buckets:
+
+```
+0.005
+0.01
+0.025
+0.05
+0.1
+0.25
+0.5
+1
+2.5
+5
+10
+```
+
+This allows queries like:
+
+```
+histogram_quantile(
+  0.95,
+  rate(
+    sentinel_http_ttfb_seconds_bucket[5m]
+  )
+)
+```
+
+---
+
+## Baseline Metrics
+
+Future feature.
+
+Sentinel can calculate deviations against historical behavior.
+
+Example:
+
+```
+sentinel_http_ttfb_baseline_seconds
+
+sentinel_http_ttfb_deviation_ratio
+```
+
+Example:
+
+```
+Current:
+
+300ms
+
+Baseline:
+
+50ms
+
+Deviation:
+
+6x
+```
+
+Possible alert:
+
+```
+sentinel_http_ttfb_deviation_ratio > 5
+```
+
+---
+
+## Recommended Alerts
+
+### Service unavailable
+
+```
+sentinel_probe_success == 0
+```
+
+---
+
+### Redirect Loop
+
+```
+sentinel_http_redirect_loop == 1
+```
+
+---
+
+### Slow Response
+
+```
+histogram_quantile(
+  0.95,
+  rate(
+    sentinel_http_ttfb_seconds_bucket[10m]
+  )
+) > 1
+```
+
+---
+
+### Certificate Expiring
+
+```
+sentinel_tls_certificate_remaining_days < 14
+```
+
+---
+
+## Metrics Design Rules
+
+The following data must not become labels:
+
+- complete URLs
+- error messages
+- redirect chains
+- response bodies
+- certificate subjects
+- HTTP headers
+
+These belong into:
+
+- logs
+- debug API
+- traces
+- external storage
+
+---
+
+## Summary
+
+Sentinel metrics are designed to answer three questions:
+
+1. Is the service available?
+2. Is the service becoming slower?
+3. What part of the request path causes the problem?
+
+The metric model intentionally provides more diagnostic value than a simple success/failure exporter while remaining Prometheus-compatible.
