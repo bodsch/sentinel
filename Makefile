@@ -51,6 +51,14 @@ cover: ## Run tests and write a coverage profile.
 	$(GO) test -race -count=1 -coverprofile=coverage.out ./...
 	$(GO) tool cover -func=coverage.out | tail -n 1
 
+.PHONY: bench
+bench: ## Run micro-benchmarks (no tests) with allocation stats.
+	$(GO) test -run '^$$' -bench . -benchmem ./...
+
+.PHONY: scaling
+scaling: ## Run the scaling profile (goroutines/heap/scrape latency at N targets).
+	SENTINEL_SCALING=1 $(GO) test -run TestScalingProfile -v -count=1 ./cmd/sentinel/
+
 .PHONY: fmt
 fmt: ## Format all Go source.
 	$(GO) fmt ./...
