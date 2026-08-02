@@ -74,11 +74,14 @@ func validateTarget(t *Target) []error {
 	if t.DNS != nil {
 		protocols++
 	}
+	if t.TCP != nil {
+		protocols++
+	}
 	switch {
 	case protocols == 0:
-		errs = append(errs, fmt.Errorf("config: %s: no protocol block (exactly one of \"http\", \"dns\" is required)", label))
+		errs = append(errs, fmt.Errorf("config: %s: no protocol block (exactly one of \"http\", \"dns\", \"tcp\" is required)", label))
 	case protocols > 1:
-		errs = append(errs, fmt.Errorf("config: %s: multiple protocol blocks (exactly one of \"http\", \"dns\" is allowed)", label))
+		errs = append(errs, fmt.Errorf("config: %s: multiple protocol blocks (exactly one of \"http\", \"dns\", \"tcp\" is allowed)", label))
 	}
 
 	if t.HTTP != nil {
@@ -87,8 +90,45 @@ func validateTarget(t *Target) []error {
 	if t.DNS != nil {
 		errs = append(errs, validateDNS(label, t.DNS)...)
 	}
+	if t.TCP != nil {
+		errs = append(errs, validateTCP(label, t.TCP)...)
+	}
 
 	errs = append(errs, validateTags(label, t.Tags)...)
+	return errs
+}
+
+// validateTCP validates a resolved TCP block: the address must be a "host:port"
+// with a non-empty host and a numeric port in range, and any banner regexes must
+// compile.
+func validateTCP(label string, tc *TCPConfig) []error {
+	var errs []error
+
+	host, port, err := net.SplitHostPort(strings.TrimSpace(tc.Address))
+	switch {
+	case tc.Address == "":
+		errs = append(errs, fmt.Errorf("config: %s: tcp.address is required", label))
+	case err != nil:
+		errs = append(errs, fmt.Errorf("config: %s: tcp.address %q must be host:port: %v", label, tc.Address, err))
+	default:
+		if strings.TrimSpace(host) == "" {
+			errs = append(errs, fmt.Errorf("config: %s: tcp.address %q must include a host", label, tc.Address))
+		}
+		if n, perr := strconv.Atoi(port); perr != nil || n < 1 || n > 65535 {
+			errs = append(errs, fmt.Errorf("config: %s: tcp.address port %q must be a number in 1-65535", label, port))
+		}
+	}
+
+	for _, pattern := range tc.Expect.BannerRegex {
+		if strings.TrimSpace(pattern) == "" {
+			errs = append(errs, fmt.Errorf("config: %s: tcp.expect.banner_regex must not be empty", label))
+			continue
+		}
+		if _, rerr := regexp.Compile(pattern); rerr != nil {
+			errs = append(errs, fmt.Errorf("config: %s: tcp.expect.banner_regex %q does not compile: %v", label, pattern, rerr))
+		}
+	}
+
 	return errs
 }
 

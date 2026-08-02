@@ -90,11 +90,17 @@ Planned:
 
 ### TCP Monitoring
 
+Implemented:
+
+- TCP connection checks (`tcp.address` = host:port) with connect-duration metric
+  (`sentinel_tcp_connect_duration_seconds`)
+- timeout handling (target timeout bounds connect + banner read)
+- banner validation (`tcp.expect.banner_regex`, all-must-match)
+
 Planned:
 
-- TCP connection checks
-- timeout handling
-- banner validation
+- query/response sequences (send a payload, expect a reply) beyond a
+  server-first banner
 
 ---
 

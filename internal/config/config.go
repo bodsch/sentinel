@@ -88,6 +88,7 @@ type Target struct {
 	Tags     map[string]string `yaml:"tags"`
 	HTTP     *HTTPConfig       `yaml:"http"`
 	DNS      *DNSConfig        `yaml:"dns"`
+	TCP      *TCPConfig        `yaml:"tcp"`
 
 	// resolved effective values, filled by applyDefaults.
 	resolvedInterval time.Duration
@@ -154,6 +155,23 @@ type DNSConfig struct {
 	// Expected is an optional set of expected answer strings. When set, at least
 	// one answer must match one expected value.
 	Expected []string `yaml:"expected"`
+}
+
+// TCPConfig describes a TCP connection check: establish a connection to Address
+// and, optionally, read a banner and validate it against regex patterns.
+type TCPConfig struct {
+	// Address is the "host:port" to connect to.
+	Address string `yaml:"address"`
+	// Expect optionally validates a banner the server sends on connect.
+	Expect TCPExpect `yaml:"expect"`
+}
+
+// TCPExpect declares TCP response validations.
+type TCPExpect struct {
+	// BannerRegex are patterns the server's banner must all match. When set, the
+	// probe reads a banner after connecting; when empty, the probe only checks
+	// that a connection can be established.
+	BannerRegex []string `yaml:"banner_regex"`
 }
 
 // Duration is a time.Duration that unmarshals from a Go duration string such as

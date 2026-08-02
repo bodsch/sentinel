@@ -148,3 +148,16 @@ targets:
       server: 1.1.1.1
       query: example.org
       type: MX
+
+  # TCP connection check with optional banner validation (e.g. the SSH greeting).
+  # Without banner_regex it only checks that a connection can be established.
+  - name: ssh
+    interval: 1m
+    tags:
+      service: ssh
+      environment: production
+    tcp:
+      address: ssh.example.org:22
+      expect:
+        banner_regex:
+          - "^SSH-2.0"

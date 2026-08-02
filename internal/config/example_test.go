@@ -37,6 +37,10 @@ func TestExampleConfigIsValid(t *testing.T) {
 			if _, ok := AllowedDNSTypes[tg.DNS.Type]; !ok {
 				t.Errorf("target %q resolved to unexpected DNS type %q", tg.Name, tg.DNS.Type)
 			}
+		case tg.TCP != nil:
+			if tg.TCP.Address == "" {
+				t.Errorf("target %q has an empty tcp.address", tg.Name)
+			}
 		default:
 			t.Errorf("target %q has no protocol block", tg.Name)
 		}
