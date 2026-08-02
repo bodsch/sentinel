@@ -1,8 +1,9 @@
 // Command benchtool provides the moving parts for benchmarking Sentinel against
 // the Prometheus blackbox_exporter: a local target server, a Sentinel config
-// generator, a blackbox /probe latency sampler, a rate-limited load driver and
-// a Sentinel /metrics scrape timer. Process lifecycle and RSS/CPU sampling live
-// in the surrounding shell orchestrator.
+// generator, a blackbox /probe latency sampler, a rate-limited load driver, a
+// Sentinel /metrics scrape timer, and a per-phase timing comparison against real
+// targets. Process lifecycle and RSS/CPU sampling live in the surrounding shell
+// orchestrator.
 package main
 
 import (
@@ -11,6 +12,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"sort"
@@ -23,7 +25,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: benchtool <target|genconfig|bb-probe|bb-load|scrape> [flags]")
+		fmt.Fprintln(os.Stderr, "usage: benchtool <target|genconfig|bb-probe|bb-load|scrape|compare> [flags]")
 		os.Exit(2)
 	}
 	switch os.Args[1] {
@@ -37,6 +39,8 @@ func main() {
 		cmdBBLoad(os.Args[2:])
 	case "scrape":
 		cmdScrape(os.Args[2:])
+	case "compare":
+		cmdCompare(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand %q\n", os.Args[1])
 		os.Exit(2)
@@ -312,6 +316,214 @@ func cmdScrape(args []string) {
 	}
 	fmt.Println()
 	printDist("  /metrics latency (ms)", lat)
+}
+
+// ---------------------------------------------------------------------------
+// compare: per-phase timing comparison against real targets. Probes each target
+// through blackbox and reads Sentinel's own gauges for the same target, so the
+// DNS/connect/TLS/TTFB/download/total bands can be compared side by side.
+//
+// Phase mapping (both are non-overlapping bands):
+//
+//	sentinel_http_dns_duration_seconds           <-> probe_http_duration_seconds{phase="resolve"}
+//	sentinel_http_tcp_connect_duration_seconds   <-> probe_http_duration_seconds{phase="connect"}
+//	sentinel_http_tls_handshake_duration_seconds <-> probe_http_duration_seconds{phase="tls"}
+//	sentinel_http_ttfb_seconds                   <-> probe_http_duration_seconds{phase="processing"}
+//	sentinel_http_download_duration_seconds      <-> probe_http_duration_seconds{phase="transfer"}
+//	sentinel_probe_duration_seconds              <-> probe_duration_seconds
+//
+// Caveat: Sentinel reports the final redirect hop; blackbox sums phases across
+// all hops. For targets with redirects the per-phase values diverge (the total
+// stays comparable), so redirect counts are printed alongside.
+// ---------------------------------------------------------------------------
+
+// phaseMap pairs a display label with the blackbox phase and Sentinel metric.
+type phaseMap struct {
+	label string
+	bb    string // blackbox probe_http_duration_seconds phase label
+	sent  string // sentinel metric name
+}
+
+var comparePhases = []phaseMap{
+	{"dns", "resolve", "sentinel_http_dns_duration_seconds"},
+	{"connect", "connect", "sentinel_http_tcp_connect_duration_seconds"},
+	{"tls", "tls", "sentinel_http_tls_handshake_duration_seconds"},
+	{"ttfb", "processing", "sentinel_http_ttfb_seconds"},
+	{"download", "transfer", "sentinel_http_download_duration_seconds"},
+}
+
+// compareTarget accumulates per-phase samples (in ms) for one target.
+type compareTarget struct {
+	name, url  string
+	sent, bb   map[string][]float64 // phase label (+ "total") -> samples
+	sentRedir  float64
+	bbRedir    float64
+	sentStatus float64
+	bbStatus   float64
+}
+
+func newCompareTarget(name, u string) *compareTarget {
+	return &compareTarget{name: name, url: u, sent: map[string][]float64{}, bb: map[string][]float64{}}
+}
+
+func cmdCompare(args []string) {
+	f := flags(args)
+	sentURL := f["sentinel"] // sentinel /metrics URL
+	bbBase := f["bb"]        // e.g. http://127.0.0.1:9115/probe?module=http_2xx
+	dur := atoi(f["dur"], 120)
+	interval := atoi(f["interval"], 5)
+	if sentURL == "" || bbBase == "" || f["targets"] == "" {
+		fmt.Fprintln(os.Stderr, "compare needs -sentinel, -bb and -targets (name=url,name=url,...)")
+		os.Exit(2)
+	}
+
+	var targets []*compareTarget
+	for _, pair := range strings.Split(f["targets"], ",") {
+		kv := strings.SplitN(pair, "=", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		targets = append(targets, newCompareTarget(kv[0], kv[1]))
+	}
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	ticks := dur / interval
+	if ticks < 1 {
+		ticks = 1
+	}
+	fmt.Printf("compare  targets=%d dur=%ds interval=%ds ticks=%d\n", len(targets), dur, interval, ticks)
+
+	for tick := 0; tick < ticks; tick++ {
+		// blackbox: one live probe per target.
+		for _, t := range targets {
+			body := httpGet(client, bbBase+"&target="+url.QueryEscape(t.url))
+			for _, ph := range comparePhases {
+				if v, ok := parseBBPhase(body, ph.bb); ok {
+					t.bb[ph.label] = append(t.bb[ph.label], v*1000)
+				}
+			}
+			if v, ok := parseBare(body, "probe_duration_seconds"); ok {
+				t.bb["total"] = append(t.bb["total"], v*1000)
+			}
+			if v, ok := parseBare(body, "probe_http_redirects"); ok {
+				t.bbRedir = v
+			}
+			if v, ok := parseBare(body, "probe_http_status_code"); ok {
+				t.bbStatus = v
+			}
+		}
+
+		// sentinel: a single scrape covers every target.
+		snap := httpGet(client, sentURL)
+		for _, t := range targets {
+			for _, ph := range comparePhases {
+				if v, ok := parseLabeled(snap, ph.sent, t.name); ok {
+					t.sent[ph.label] = append(t.sent[ph.label], v*1000)
+				}
+			}
+			if v, ok := parseLabeled(snap, "sentinel_probe_duration_seconds", t.name); ok {
+				t.sent["total"] = append(t.sent["total"], v*1000)
+			}
+			if v, ok := parseLabeled(snap, "sentinel_http_redirects", t.name); ok {
+				t.sentRedir = v
+			}
+			if v, ok := parseLabeled(snap, "sentinel_http_status_code", t.name); ok {
+				t.sentStatus = v
+			}
+		}
+
+		if tick < ticks-1 {
+			time.Sleep(time.Duration(interval) * time.Second)
+		}
+	}
+
+	// report
+	for _, t := range targets {
+		fmt.Printf("\n== %s (%s)\n", t.name, t.url)
+		fmt.Printf("   status sent=%.0f bb=%.0f | redirects sent=%.0f bb=%.0f%s\n",
+			t.sentStatus, t.bbStatus, t.sentRedir, t.bbRedir,
+			redirNote(t.sentRedir, t.bbRedir))
+		fmt.Printf("   %-9s %12s %12s %10s\n", "phase", "sentinel(ms)", "blackbox(ms)", "delta")
+		for _, ph := range append([]phaseMap{}, comparePhases...) {
+			printCompareRow(ph.label, t.sent[ph.label], t.bb[ph.label])
+		}
+		printCompareRow("total", t.sent["total"], t.bb["total"])
+	}
+}
+
+func printCompareRow(label string, sent, bb []float64) {
+	sm, sn := meanN(sent)
+	bm, bn := meanN(bb)
+	delta := ""
+	if sn > 0 && bn > 0 {
+		delta = fmt.Sprintf("%+.2f", sm-bm)
+	}
+	fmt.Printf("   %-9s %12s %12s %10s\n", label, meanCell(sm, sn), meanCell(bm, bn), delta)
+}
+
+func redirNote(a, b float64) string {
+	if a > 0 || b > 0 {
+		return "  (redirects: per-phase not directly comparable; compare total)"
+	}
+	return ""
+}
+
+func meanN(xs []float64) (float64, int) {
+	if len(xs) == 0 {
+		return 0, 0
+	}
+	var s float64
+	for _, x := range xs {
+		s += x
+	}
+	return s / float64(len(xs)), len(xs)
+}
+
+func meanCell(m float64, n int) string {
+	if n == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%.2f (n=%d)", m, n)
+}
+
+func httpGet(c *http.Client, u string) string {
+	resp, err := c.Get(u)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return string(b)
+}
+
+// parseBare reads an unlabeled metric line: `<name> <value>`.
+func parseBare(body, name string) (float64, bool) {
+	re := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(name) + `\s+([0-9.eE+-]+)`)
+	if m := re.FindStringSubmatch(body); m != nil {
+		v, err := strconv.ParseFloat(m[1], 64)
+		return v, err == nil
+	}
+	return 0, false
+}
+
+// parseBBPhase reads probe_http_duration_seconds{phase="<phase>"}.
+func parseBBPhase(body, phase string) (float64, bool) {
+	re := regexp.MustCompile(`(?m)^probe_http_duration_seconds\{phase="` + regexp.QuoteMeta(phase) + `"\}\s+([0-9.eE+-]+)`)
+	if m := re.FindStringSubmatch(body); m != nil {
+		v, err := strconv.ParseFloat(m[1], 64)
+		return v, err == nil
+	}
+	return 0, false
+}
+
+// parseLabeled reads a metric line carrying a target="<name>" label.
+func parseLabeled(body, name, target string) (float64, bool) {
+	re := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(name) + `\{[^}]*\btarget="` + regexp.QuoteMeta(target) + `"[^}]*\}\s+([0-9.eE+-]+)`)
+	if m := re.FindStringSubmatch(body); m != nil {
+		v, err := strconv.ParseFloat(m[1], 64)
+		return v, err == nil
+	}
+	return 0, false
 }
 
 // ---------------------------------------------------------------------------
