@@ -264,6 +264,7 @@ func httpOptions(target config.Target) httpprobe.Options {
 		ExpectStatus:    h.Expect.ExpectedStatus(),
 		BodyRegex:       h.Expect.BodyRegex,
 		Headers:         h.Expect.Headers,
+		JSONChecks:      jsonChecks(h.Expect.JSON),
 		RequestHeaders:  h.Headers,
 		BearerToken:     h.BearerToken,
 		Body:            h.Body,
@@ -273,6 +274,18 @@ func httpOptions(target config.Target) httpprobe.Options {
 		opts.BasicAuthPass = h.BasicAuth.Password
 	}
 	return opts
+}
+
+// jsonChecks maps config JSONPath assertions to HTTP prober checks.
+func jsonChecks(in []config.JSONExpect) []httpprobe.JSONCheck {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]httpprobe.JSONCheck, len(in))
+	for i, jx := range in {
+		out[i] = httpprobe.JSONCheck{Path: jx.Path, Equals: jx.Equals}
+	}
+	return out
 }
 
 // parseFlags parses args into a config. The done flag is true when the process

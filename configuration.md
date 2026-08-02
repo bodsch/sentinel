@@ -342,20 +342,39 @@ http:
 
 ---
 
-## JSON Validation (0.2+)
+## JSON Validation (0.2)
 
-> Not implemented in 0.1. The 0.1 HTTP validators are status code, body regex, and header match.
-> JSONPath and XPath validation arrive in 0.2 via the same `Validator` interface.
-
-Example:
+`http.expect.json` is a list of JSONPath assertions on a JSON response body
+(standard `$`-rooted JSONPath, via `github.com/ohler55/ojg`). Each entry has a
+`path` that must resolve; when it also sets `equals`, the resolved **scalar**
+value (compared as a string) must equal it. Omitting `equals` is an
+existence-only check. All assertions must pass.
 
 ```
 http:
   url: https://api.example.org/status
   expect:
     json:
-      "$.status": "healthy"
+      - path: "$.status"
+        equals: "healthy"     # scalar equality (string, number, or bool)
+      - path: "$.version.major"
+        equals: "2"           # numbers compared by their text form
+      - path: "$.components"   # existence only (path must resolve)
 ```
+
+- The body must parse as JSON (a non-JSON body, trailing data after the JSON, or
+  a body truncated by `max_body_bytes` all fail). For large JSON responses, raise
+  `max_body_bytes` (or set it to `0`) so the whole document is read.
+- Numbers compare **numerically**: `equals: "200"` matches `200`, `200.0` and
+  `2e2`. Strings, bools and `null` compare by text (`equals: "null"` matches a
+  JSON null).
+- `equals` compares scalars only. A path resolving to an array or object with
+  `equals` set fails; use it without `equals` for an existence check.
+- A path that matches **several** nodes (via a wildcard or filter, e.g.
+  `$.items[*].status`) requires **every** matched value to satisfy `equals`;
+  existence needs at least one match.
+- `expect.json` cannot be used with method `HEAD` (no response body). An invalid
+  `path` is rejected at config validation.
 
 ---
 

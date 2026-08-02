@@ -61,6 +61,10 @@ targets:
           - "\"status\"\\s*:\\s*\"(ok|healthy)\""
         headers:             # response-header expectations (validation)
           Content-Type: application/json
+        json:                # JSONPath assertions on the response body
+          - path: "$.status"
+            equals: "ok"
+          - path: "$.uptime"  # existence only
 
   # POST with a JSON request body (Content-Type via headers). Redirects, if any,
   # are followed as a bodyless GET.

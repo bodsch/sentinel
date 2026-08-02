@@ -235,6 +235,35 @@ targets:
 	}
 }
 
+func TestHTTPJSONExpectValid(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseResolve(t, `
+targets:
+  - name: api
+    http:
+      url: https://a.example
+      expect:
+        json:
+          - path: "$.status"
+            equals: "ok"
+          - path: "$.data.items"
+`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	j := cfg.Targets[0].HTTP.Expect.JSON
+	if len(j) != 2 {
+		t.Fatalf("json checks = %d, want 2", len(j))
+	}
+	if j[0].Path != "$.status" || j[0].Equals == nil || *j[0].Equals != "ok" {
+		t.Errorf("check[0] = %+v, want $.status equals ok", j[0])
+	}
+	if j[1].Path != "$.data.items" || j[1].Equals != nil {
+		t.Errorf("check[1] = %+v, want $.data.items existence-only", j[1])
+	}
+}
+
 func TestValidationErrors(t *testing.T) {
 	t.Parallel()
 
@@ -357,6 +386,21 @@ func TestValidationErrors(t *testing.T) {
 			name:    "two protocol blocks",
 			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n    tcp:\n      address: a.example:22\n",
 			wantSub: "multiple protocol blocks",
+		},
+		{
+			name:    "json expect without path",
+			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n      expect:\n        json:\n          - equals: ok\n",
+			wantSub: "json[0].path is required",
+		},
+		{
+			name:    "json expect invalid path",
+			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n      expect:\n        json:\n          - path: \"$[\"\n",
+			wantSub: "not valid JSONPath",
+		},
+		{
+			name:    "json expect with HEAD",
+			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n      method: HEAD\n      expect:\n        json:\n          - path: \"$.status\"\n",
+			wantSub: "cannot be used with method HEAD",
 		},
 	}
 
