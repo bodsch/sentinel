@@ -20,12 +20,15 @@ The configuration is designed for:
 - GitOps workflows
 - automated generation
 
-> **Version scope:** This document specifies the full configuration surface. **Version 0.1**
-> implements only what the HTTP slice needs: `defaults` + `targets` (no templates), a fixed label
-> set, a single total `timeout`, HTTP validators (status / body_regex / headers), and a bounded
-> `max_body_bytes` (default 1 MB). Sections marked **(0.2+)** below — templates, retry, per-target
-> proxy, per-phase timeouts, JSONPath/XPath, hot reload — are not yet implemented. Config is loaded
-> once at startup; there is no hot reload in 0.1.
+> **Version scope:** This document specifies the full configuration surface. **Version 0.2**
+> implements a `defaults` + `targets` layout (no templates), a fixed label set, a single total
+> `timeout`, and three protocols: **HTTP** (methods GET/HEAD/POST/PUT/PATCH/DELETE, request body,
+> custom headers, Basic/Bearer auth, per-target `max_body_bytes`), **DNS** (A/AAAA/MX/TXT), and
+> **TCP** (connect + `banner_regex`). Response validators are status / body_regex / headers /
+> **JSONPath** (`expect.json`). Sections marked **(0.2+ / planned)** below — templates, retry,
+> per-target proxy, per-phase timeouts, **XPath**, hot reload, and the standalone `icmp`/`tls`/
+> `network` blocks — are not yet implemented. Config is loaded once at startup; there is no hot
+> reload yet.
 
 ---
 
@@ -106,7 +109,7 @@ Later values override previous values.
 
 Defaults avoid repeating common settings.
 
-Example (0.1 fields):
+Example:
 
 ```
 defaults:
@@ -121,19 +124,19 @@ defaults:
 
 All targets inherit these settings.
 
-> **Note:** `retries` (see Retry Configuration) is a 0.2+ field and is rejected
-> by the 0.1 loader. There is no `validate_tls` field: in 0.1 TLS is always
-> inspected for HTTPS targets (expiry, hostname, remaining days) — see the TLS
-> section. Unknown fields fail validation, so keep example configs to the fields
-> your version supports.
+> **Note:** `retries` (see Retry Configuration) is not implemented yet and is
+> rejected as an unknown field. There is no `validate_tls` field either: TLS is
+> always inspected for HTTPS targets (expiry, hostname, remaining days) — see the
+> TLS section. Unknown fields fail validation, so keep example configs to the
+> fields your version supports.
 
 ---
 
 ## Templates (0.2+)
 
-> Not implemented in 0.1. In 0.1 only `defaults` + `targets` exist, with a trivial merge rule
+> Not implemented yet. Currently only `defaults` + `targets` exist, with a trivial merge rule
 > (a target value wins over the default, otherwise the default applies — no deep merge). Templates,
-> with their nested merge semantics, arrive in 0.2.
+> with their nested merge semantics, are a later feature.
 
 Templates define reusable monitoring profiles.
 
@@ -191,7 +194,7 @@ tags:
   environment: production
   location: datacenter-1
 ```
-In 0.1 only tags from a **fixed allowed set** become Prometheus labels: `environment`, `location`,
+Only tags from a **fixed allowed set** become Prometheus labels: `environment`, `location`,
 `service` (plus the always-present `target` and `type`). A tag outside this set is **rejected at
 config validation**, not silently ignored — this prevents accidental high-cardinality labels.
 Free-form tags-as-labels, with sanitizing and governance, are a 0.2+ feature.
@@ -380,7 +383,7 @@ http:
 
 ## XPath Validation (0.2+)
 
-> Not implemented in 0.1 (see JSON Validation above).
+> Not implemented yet (unlike JSON validation above, which is).
 
 Example:
 ```
@@ -463,28 +466,29 @@ targets:
 
 ---
 
-## ICMP Configuration
+## ICMP Configuration (planned)
 
-Example:
+> Not implemented. An `icmp` protocol block does not exist yet and is rejected as
+> an unknown field. Planned shape:
+
 ```
 icmp:
   host: router.example.org
   count: 5
   timeout: 3s
 ```
-Metrics:
 
-- packet loss
-- latency
-- jitter
+Planned metrics: packet loss, latency, jitter.
 
 ---
 
-## TLS Configuration
+## TLS Configuration (planned)
 
-TLS checks can be standalone or attached to HTTPS.
+> Not implemented as a standalone block. Today TLS is inspected implicitly for
+> HTTPS targets (certificate expiry, hostname, remaining days — see the TLS
+> metrics in `metrics.md`). A standalone `tls:` block is rejected as an unknown
+> field. Planned shape:
 
-Example:
 ```
 tls:
   host: example.org
@@ -492,6 +496,7 @@ tls:
   validate_chain: true
   minimum_days_remaining: 30
 ```
+
 ---
 
 ## Scheduling
@@ -510,7 +515,7 @@ targets:
 
 ## Retry Configuration (0.2+)
 
-> Not implemented in 0.1. A probe run is a single attempt. Transient failures are meant to be
+> Not implemented yet. A probe run is a single attempt. Transient failures are meant to be
 > damped in Prometheus alerting rules (`for:`), where alert tolerance already lives, rather than in
 > the exporter. In-probe retry (with its own metrics and timeout interaction) is a 0.2 feature.
 
@@ -538,7 +543,7 @@ Attempt 2
 
 ## Timeouts
 
-In 0.1 a target has a **single total `timeout`**, applied as one deadline over the whole probe run
+Today a target has a **single total `timeout`**, applied as one deadline over the whole probe run
 (including all redirect hops). If it fires, the failure reason is `timeout` and the log carries the
 `phase` reached (from HTTP tracing), so you still see roughly where it hung.
 
@@ -548,7 +553,7 @@ timeout: 10s
 
 ### Per-phase timeouts (0.2+)
 
-> Not implemented in 0.1. Fine-grained per-phase deadlines require reaching into the transport's
+> Not implemented yet. Fine-grained per-phase deadlines require reaching into the transport's
 > dial and TLS-handshake machinery and defining how they compose with the total. Deferred to 0.2.
 
 ```
@@ -562,12 +567,12 @@ timeout:
 
 ## Proxy Support
 
-In 0.1 Sentinel honours the standard `HTTP_PROXY` / `HTTPS_PROXY` environment variables
+Today Sentinel honours the standard `HTTP_PROXY` / `HTTPS_PROXY` environment variables
 (`http.ProxyFromEnvironment`), which is often required in corporate networks.
 
 ### Per-target proxy (0.2+)
 
-> Not implemented in 0.1.
+> Not implemented yet.
 
 ```
 http:
@@ -576,33 +581,32 @@ http:
 ```
 ---
 
-## IPv4 / IPv6 Selection
+## IPv4 / IPv6 Selection (planned)
 
-Explicit protocol selection:
+> Not implemented. There is no `network` block yet; it is rejected as an unknown
+> field. Planned shape:
 
 ```
 network:
-  ip_version: ipv4
+  ip_version: ipv4    # auto | ipv4 | ipv6
 ```
-
-Allowed:
-
-- auto
-- ipv4
-- ipv6
 
 ---
 
 ## Configuration Validation
 
-Before activation Sentinel validates:
+Before activation Sentinel validates (run it explicitly with `--validate`):
 
-- syntax
-- schema
-- referenced templates
-- duplicate target names
-- invalid intervals
-- unsupported protocols
+- syntax and schema, rejecting unknown fields
+- exactly one protocol block per target (`http` / `dns` / `tcp`)
+- duplicate target names, non-positive intervals/timeouts
+- HTTP: method in the allowed set; `expect.status` in 100–599; non-empty
+  `body_regex` patterns that compile; a URL with a host and **no** embedded
+  userinfo credentials; a valid JSONPath for each `expect.json` entry; auth
+  mutual-exclusivity; `max_body_bytes` not negative (and `0` only per target)
+- DNS: supported record type; non-empty `expected` values
+- TCP: `address` is `host:port` with a numeric port in 1–65535; banner regexes
+  compile
 
 Example:
 
@@ -620,7 +624,7 @@ unknown field "status_codee"
 
 ## Hot Reload (only an idea, not planned before 0.8+)
 
-> Not implemented in 0.1. Config is loaded once at startup; to apply changes, restart the process
+> Not implemented yet. Config is loaded once at startup; to apply changes, restart the process
 > (cheap under systemd/Kubernetes). Diff-based hot reload is a later feature.
 
 Configuration reload should not interrupt running probes.
@@ -658,7 +662,7 @@ Possible future configuration sources:
 
 ## Complete Example
 
-A complete, **0.1-valid** example that passes `--validate`:
+A complete, valid example that passes `--validate`:
 
 ```yaml
 defaults:
@@ -695,9 +699,9 @@ targets:
 ```
 
 > The repository ships `config.example.yaml`, which is kept valid by an automated
-> test — use it as the authoritative, always-current example. The earlier
-> template/TCP-based example was removed because templates and non-HTTP protocols
-> are 0.2+ and are rejected by the 0.1 loader.
+> test — use it as the authoritative, always-current example. It exercises HTTP,
+> DNS and TCP targets; only templates remain unsupported and are rejected by the
+> loader.
 
 ---
 

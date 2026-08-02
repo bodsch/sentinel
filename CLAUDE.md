@@ -13,15 +13,18 @@ er langsam/nicht erreichbar?" — über phasengenaue Diagnostik (DNS/TCP/TLS/TTF
 
 ### Features
 - aktives, kontinuierliches Verproben konfigurierter Targets (entkoppelt vom Prometheus-Scrape)
-- HTTP/HTTPS-Probes mit phasengenauem Timing (DNS, TCP, TLS, TTFB, Download)
-- Response-Validierung (Status-Code, Body-Regex, Header)
+- HTTP/HTTPS-Probes mit phasengenauem Timing (DNS, TCP, TLS, TTFB, Download), Methoden
+  GET/HEAD/POST/PUT/PATCH/DELETE, Request-Body, Custom-Headern und Basic/Bearer-Auth
+- DNS-Probe (A/AAAA/MX/TXT) und TCP-Probe (Connect + optionale Banner-Validierung)
+- Response-Validierung (Status-Code, Body-Regex, Header, JSONPath)
 - Redirect-Handling inkl. Loop- und HTTPS→HTTP-Downgrade-Erkennung
 - TLS-Diagnostik (Ablauf, Hostname, verbleibende Tage)
+- Latenz-Histogramme (zur Probe-Zeit gefüttert) plus Per-Phase-Gauges und `go_*`/`process_*`-Metriken
 - Prometheus-Metriken über `/metrics`, Health-/Ready-Checks (`/healthz`, `/readyz`)
 
-Version 0.1 ist bewusst ein schmaler vertikaler HTTP-Durchstich. Version 0.2 ergänzt eine
-DNS-Probe (A/AAAA/MX/TXT). Weitere Protokolle (TCP, ICMP, Mail, …) und Features sind in `Roadmap.md`
-für spätere Versionen vorgesehen.
+Version 0.1 war ein schmaler vertikaler HTTP-Durchstich. Version 0.2 ergänzt DNS- (A/AAAA/MX/TXT)
+und TCP-Probes, JSONPath-Validierung sowie Latenz-Histogramme. Weitere Protokolle (ICMP, Mail, …)
+und Features sind in `Roadmap.md` für spätere Versionen vorgesehen.
 
 ## Commands
 
@@ -154,8 +157,9 @@ Der Agent soll:
 │   ├── config            # YAML load/validate, defaults merge, label allow-list
 │   ├── probe             # Prober interface, Result, FailureReason enum
 │   │   ├── http          # HTTP probe: httptrace timings, redirects, TLS inspection
-│   │   └── dns           # DNS probe (0.2): miekg/dns, RCODE/answers, TCP fallback
-│   ├── validator         # Validator interface + status/regex/header
+│   │   ├── dns           # DNS probe: miekg/dns, RCODE/answers, TCP fallback
+│   │   └── tcp           # TCP probe: connection check + optional banner_regex
+│   ├── validator         # Validator interface + status/regex/header/jsonpath
 │   ├── scheduler         # ticker-per-target + semaphore + skip-if-running
 │   ├── store             # thread-safe result store (name = primary key)
 │   ├── metrics           # self-registering collectors, registry, build_info

@@ -20,13 +20,18 @@ Sentinel focuses on detailed diagnostics, low overhead, and extensibility.
 
 ## Scope of this document
 
-This README describes the **full product vision**. The current milestone, **version 0.1**, is a
-deliberately narrow vertical slice: **HTTP/HTTPS only**, but with the complete runtime skeleton
-(configuration → scheduler → probe → result store → `/metrics`) and full HTTP phase timing.
+This README describes the **full product vision**. The current milestone, **version 0.2**, builds on
+the complete runtime skeleton (configuration → scheduler → probe → result store → `/metrics`) and
+already ships:
 
-Everything else described below — DNS/TCP/ICMP probes, histograms, templates, hot reload,
-JSONPath/XPath validation, authentication, a debug API, distributed agents — is planned for later
-versions. See `Roadmap.md` for the version breakdown.
+- **HTTP/HTTPS** probes with full phase timing (methods GET/HEAD/POST/PUT/PATCH/DELETE, request body,
+  custom headers, Basic/Bearer auth, per-target body-size cap, redirect handling, TLS diagnostics)
+- a **DNS** probe (A/AAAA/MX/TXT) and a **TCP** probe (connection check + optional banner validation)
+- response validators: status, body regex, header match, and **JSONPath** (`expect.json`)
+- latency **histograms** fed at probe time, plus per-phase gauges and `go_*`/`process_*` runtime metrics
+
+Still planned: ICMP and other protocols, XPath validation, templates, hot reload, a debug API, and
+distributed agents. See `Roadmap.md` for the version breakdown.
 
 ---
 
@@ -105,18 +110,18 @@ New protocols and validators can be added without changing the core engine.
 
 Supported features:
 
-- HTTP/1.1
-- HTTP/2
-- HTTP/3 (planned)
+- methods GET / HEAD / POST / PUT / PATCH / DELETE
+- request body (`http.body`) and custom request headers (`http.headers`)
+- Basic auth (`http.basic_auth`) and bearer token (`http.bearer_token`)
+- per-target response body-size cap (`http.max_body_bytes`, `0` = uncapped)
 - status code validation
 - header validation
-- body validation
-- regex checks
-- JSONPath checks
-- XPath checks
-- redirect tracking
-- redirect loop detection
-- TLS validation
+- body regex validation
+- JSONPath validation (`http.expect.json`)
+- redirect tracking, loop detection, HTTPS→HTTP downgrade detection
+- TLS certificate diagnostics (expiry, hostname, remaining days)
+
+Planned: HTTP/2 tuning, HTTP/3, XPath validation, compression analysis.
 
 Measured phases:
 
@@ -181,39 +186,38 @@ Sentinel measures:
 - TLS handshake latency
 - Time To First Byte
 - complete download duration
-- transferred bytes
-- transfer rate
 
-Example metrics:
+Example metrics (per-phase gauges; `sentinel_http_ttfb_seconds` and
+`sentinel_probe_duration_seconds` are **histograms**, fed at probe time):
 
 ```
 sentinel_http_dns_duration_seconds
 
 sentinel_http_tcp_connect_duration_seconds
 
-sentinel_http_tls_duration_seconds
+sentinel_http_tls_handshake_duration_seconds
 
-sentinel_http_ttfb_seconds
+sentinel_http_ttfb_seconds            # histogram (_bucket/_sum/_count)
 
 sentinel_http_download_duration_seconds
 ```
+
+See `metrics.md` for the full metric catalogue (probe state, TLS certificate,
+DNS, TCP, `sentinel_scrape_duration_seconds`, `sentinel_build_info`, and the
+`go_*`/`process_*` runtime collectors).
 
 ---
 
 ## Supported Protocols
 
-### Version 0.1
+### Implemented
 
-- HTTP
-- HTTPS
-
-### Version 0.2
-
+- HTTP / HTTPS
 - DNS (A, AAAA, MX, TXT)
+- TCP (connection check + optional `banner_regex` validation)
 
-### Planned (0.2+)
+### Planned
 
-- TCP
 - ICMP
 - SMTP
 - IMAP
@@ -277,7 +281,8 @@ targets:
     tcp:
       address: mail.example.org:25
       expect:
-        banner: "ESMTP"
+        banner_regex:
+          - "ESMTP"
   - name: dns-check
     interval: 30s
     dns:
@@ -290,18 +295,22 @@ targets:
 
 ## Prometheus Integration
 
-Sentinel exposes:
+Sentinel serves three endpoints (default `:8080`):
 
 ```
-GET /metrics
+GET /metrics    Prometheus metrics
+GET /healthz    liveness (always 200 while running)
+GET /readyz     readiness (200 once started, else 503)
 ```
+
+CLI flags: `-config`, `-validate` (load, validate, and exit), `-listen`,
+`-log-level`, `-log-format`, `-version`.
+
 Example:
 ```
 sentinel_probe_success{target="homepage"} 1
 
-sentinel_http_ttfb_seconds{
-    target="homepage"
-} 0.085
+sentinel_http_ttfb_seconds_bucket{target="homepage",le="0.1"} 42
 ```
 
 ---
@@ -313,7 +322,6 @@ Planned improvements:
 - REST API
 - Web UI
 - live probe execution
-- configuration validation
 - dynamic configuration reload
 - templates
 - target inheritance
