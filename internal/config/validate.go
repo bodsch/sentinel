@@ -24,6 +24,14 @@ func (c *Config) Validate() error {
 		errs = append(errs, errors.New("config: no targets defined"))
 	}
 
+	// The no-cap opt-out (max_body_bytes: 0) removes a DoS safeguard, so it must
+	// be a deliberate per-target choice. Rejecting it in the defaults block
+	// prevents one line from silently uncapping the whole fleet (which would
+	// then inherit 0 via applyHTTPDefaults).
+	if mb := c.Defaults.HTTP.MaxBodyBytes; mb != nil && *mb <= 0 {
+		errs = append(errs, errors.New("config: defaults.http.max_body_bytes must be a positive cap; the no-cap opt-out (0) is only allowed per target"))
+	}
+
 	seen := make(map[string]struct{}, len(c.Targets))
 	for i := range c.Targets {
 		t := &c.Targets[i]
@@ -182,8 +190,8 @@ func validateHTTP(label string, h *HTTPConfig) []error {
 	if h.ResolvedMaxRedirects() < 0 {
 		errs = append(errs, fmt.Errorf("config: %s: http.max_redirects must not be negative", label))
 	}
-	if h.ResolvedMaxBodyBytes() <= 0 {
-		errs = append(errs, fmt.Errorf("config: %s: http.max_body_bytes must be greater than zero", label))
+	if h.ResolvedMaxBodyBytes() < 0 {
+		errs = append(errs, fmt.Errorf("config: %s: http.max_body_bytes must not be negative (0 means no cap)", label))
 	}
 
 	if h.Expect.Status != 0 && (h.Expect.Status < 100 || h.Expect.Status > 599) {

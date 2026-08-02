@@ -112,6 +112,42 @@ targets:
 	}
 }
 
+func TestMaxBodyBytesOverrideAndOptOut(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseResolve(t, `
+defaults:
+  http:
+    max_body_bytes: 1048576
+targets:
+  - name: inherits
+    http:
+      url: https://a.example
+  - name: raises
+    http:
+      url: https://b.example
+      max_body_bytes: 5242880
+  - name: uncapped
+    http:
+      url: https://c.example
+      max_body_bytes: 0
+`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got, want := cfg.Targets[0].HTTP.ResolvedMaxBodyBytes(), int64(1048576); got != want {
+		t.Errorf("inherited max_body_bytes = %d, want %d", got, want)
+	}
+	// Per-target override to a larger cap.
+	if got, want := cfg.Targets[1].HTTP.ResolvedMaxBodyBytes(), int64(5242880); got != want {
+		t.Errorf("raised max_body_bytes = %d, want %d", got, want)
+	}
+	// Explicit 0 opts out of the cap and is preserved over the 1 MiB default.
+	if got := cfg.Targets[2].HTTP.ResolvedMaxBodyBytes(); got != 0 {
+		t.Errorf("uncapped max_body_bytes = %d, want 0 (opt-out preserved over the default)", got)
+	}
+}
+
 func TestValidationErrors(t *testing.T) {
 	t.Parallel()
 
@@ -174,6 +210,16 @@ func TestValidationErrors(t *testing.T) {
 			name:    "negative interval override",
 			yaml:    "targets:\n  - name: x\n    interval: -5s\n    http:\n      url: https://a.example\n",
 			wantSub: "interval must be greater than zero",
+		},
+		{
+			name:    "negative max_body_bytes",
+			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n      max_body_bytes: -1\n",
+			wantSub: "max_body_bytes must not be negative",
+		},
+		{
+			name:    "no-cap opt-out in defaults",
+			yaml:    "defaults:\n  http:\n    max_body_bytes: 0\ntargets:\n  - name: x\n    http:\n      url: https://a.example\n",
+			wantSub: "only allowed per target",
 		},
 	}
 
