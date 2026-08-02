@@ -115,7 +115,6 @@ Planned:
 
 - histogram support (latency distributions, fed at probe time)
 - in-probe retry with retry metrics
-- configuration templates and hot reload
 - ~~scrape performance at high target counts~~ **(addressed)**. `/metrics`
   rendering is O(N) (~259 ms at N=10000 — see `docs/benchmark-vs-blackbox.md`,
   Dimension B). Investigation showed the cost is ~95 % Prometheus client-library
@@ -134,7 +133,6 @@ Planned:
 Planned:
 
 - HTTP/2 optimization
-- HTTP/3 support
 - custom request headers
 - request body support
 - authentication support
@@ -172,6 +170,7 @@ Planned:
 
 - DNSSEC validation
 - resolver comparison
+- multiple resolver
 - authoritative server checks
 
 ---
@@ -351,6 +350,24 @@ Possible alerts:
 - unusual latency
 - unexpected behavior
 - degradation trends
+
+---
+
+## Deferred / Optional
+
+Explicitly pushed back and marked **optional**: not tied to any version and not
+required for Sentinel to be fully useful. Revisit only when a concrete need
+appears. (Distinct from *Out of Scope* below, which are hard non-goals.)
+
+- **configuration templates** — reduce config duplication. Deferred: the flat
+  `defaults` + `targets` model is adequate at the current scale, so the added
+  complexity is not justified yet.
+- **hot reload** (SIGHUP / config file watch) — apply config changes without a
+  restart. Deferred: a rolling restart is acceptable for the current deployment
+  model; low marginal value today.
+- **HTTP/3 support** — probe over HTTP/3 / QUIC. Deferred: value is questionable
+  right now — most monitored endpoints do not require QUIC-level probing and the
+  standard-library HTTP/3 story is still maturing. Revisit if real demand shows.
 
 ---
 
