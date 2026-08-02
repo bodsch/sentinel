@@ -103,7 +103,7 @@ sentinel_probe_success{
 
 ## Probe Duration
 
-Total execution time.
+Distribution of total probe run duration, over all probe types.
 
 ```
 sentinel_probe_duration_seconds
@@ -112,15 +112,27 @@ sentinel_probe_duration_seconds
 Type:
 
 ```
-Gauge
+Histogram   (0.2 — was a Gauge in 0.1)
 ```
 
-Example:
+It is a **histogram fed at probe time** (see *Histograms* below), not a
+scrape-time gauge: because Sentinel probes more often than Prometheus scrapes,
+every probe is recorded, not just the last one visible at a scrape. Only
+**successful** probes are observed, so timeouts and fast failures do not distort
+the latency distribution (failure is carried by `sentinel_probe_success`).
+
+Example (bucket / sum / count series):
 
 ```
-sentinel_probe_duration_seconds{
-    target="homepage"
-} 0.152
+sentinel_probe_duration_seconds_bucket{target="homepage",le="0.25"} 12
+sentinel_probe_duration_seconds_sum{target="homepage"} 1.83
+sentinel_probe_duration_seconds_count{target="homepage"} 12
+```
+
+Query the p95 with:
+
+```
+histogram_quantile(0.95, rate(sentinel_probe_duration_seconds_bucket[5m]))
 ```
 
 ---
@@ -270,20 +282,32 @@ sentinel_http_tls_handshake_duration_seconds
 
 ### Time To First Byte
 
-The first byte received after sending the request.
+Distribution of the time to the first response byte — one of the most important
+application performance indicators.
 
 ```
 sentinel_http_ttfb_seconds
+```
+
+Type:
 
 ```
-This is one of the most important application performance indicators.
+Histogram   (0.2 — was a Gauge in 0.1)
+```
+
+Like `sentinel_probe_duration_seconds`, it is a **histogram fed at probe time**,
+recording every successful HTTP probe (skipping non-HTTP records, failures, and
+runs with no measured first byte). The other HTTP phase timings
+(`http_dns_duration_seconds`, `http_tcp_connect_duration_seconds`,
+`http_tls_handshake_duration_seconds`, `http_download_duration_seconds`) remain
+last-value gauges.
 
 Example:
 
 ```
-sentinel_http_ttfb_seconds{
-    target="api"
-} 0.084
+sentinel_http_ttfb_seconds_bucket{target="api",le="0.1"} 40
+sentinel_http_ttfb_seconds_sum{target="api"} 3.1
+sentinel_http_ttfb_seconds_count{target="api"} 40
 ```
 
 ---
@@ -597,45 +621,42 @@ series), a gap leaves it unmonitored.
 
 ## Histograms
 
-> **Version note:** Histograms are a **0.2** feature. Version 0.1 exposes the current-value state
-> gauges above (read live at scrape time). Histograms accumulate *observations* and must be fed at
-> probe time via `.Observe()` — a different lifecycle from the scrape-time state collector — so they
-> are introduced alongside that mechanism in 0.2.
+**Implemented in 0.2.** Latency histograms accumulate *observations* and must be
+fed at probe time via `.Observe()` — a different lifecycle from the scrape-time
+state collectors. Sentinel feeds them through the scheduler's observer hook: as
+each probe completes, its result is handed to observers that record into
+persistent `HistogramVec`s. This is deliberately *not* the scrape-time model —
+because Sentinel probes more often than Prometheus scrapes, a scrape-time gauge
+would only ever expose the last probe, while the histogram captures every one.
 
-For latency analysis Sentinel should expose histograms.
+Two latency metrics are histograms (they replaced the 0.1 gauges of the same
+name — a breaking change for consumers that read them as gauges):
 
-Example:
+| Metric | Scope |
+|---|---|
+| `sentinel_probe_duration_seconds` | total run duration, all probe types |
+| `sentinel_http_ttfb_seconds` | HTTP time-to-first-byte |
+
+Only **successful** probes are observed, so timeouts and fast failures do not
+distort the distributions. The remaining phase timings (DNS/TCP/TLS/download)
+stay last-value gauges to bound cardinality — each histogram adds
+`buckets + 2` series per target.
+
+Shared buckets (seconds), spanning fast local responses to near-timeout runs:
 
 ```
-sentinel_http_ttfb_seconds_bucket
-```
-
-Recommended buckets:
-
-```
-0.005
-0.01
-0.025
-0.05
-0.1
-0.25
-0.5
-1
-2.5
-5
-10
+0.005  0.01  0.025  0.05  0.1  0.25  0.5  1  2.5  5  10
 ```
 
 This allows queries like:
 
 ```
-histogram_quantile(
-  0.95,
-  rate(
-    sentinel_http_ttfb_seconds_bucket[5m]
-  )
-)
+histogram_quantile(0.95, rate(sentinel_http_ttfb_seconds_bucket[5m]))
 ```
+
+> **Caveat:** histogram series are persistent, not read live from the store, so a
+> removed target's series linger until the process restarts (unlike the state
+> gauges, which vanish as soon as the target leaves the store).
 
 ---
 

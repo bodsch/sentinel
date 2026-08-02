@@ -30,12 +30,34 @@ const defaultConcurrency = 50
 // while short intervals keep their full-interval load spreading.
 const maxInitialDelay = 10 * time.Second
 
+// Observer is notified of every completed probe result, at probe time. It is the
+// write path for metrics that accumulate observations (e.g. latency histograms),
+// which — unlike the scrape-time state collectors — must be fed as each probe
+// finishes so they capture every probe, not just the one visible at scrape time.
+// Implementations must be safe for concurrent use and must not block.
+type Observer interface {
+	Observe(store.Record)
+}
+
+// Observers fans a single Observe call out to several Observers, in order.
+type Observers []Observer
+
+// Observe forwards the record to every observer.
+func (o Observers) Observe(r store.Record) {
+	for _, obs := range o {
+		obs.Observe(r)
+	}
+}
+
 // Options configures a Scheduler.
 type Options struct {
 	// Clock supplies time; use clock.Real in production, a fake in tests.
 	Clock clock.Clock
 	// Store receives probe results.
 	Store *store.Store
+	// Observer, if non-nil, is notified of each completed (stored) probe result.
+	// Results discarded during shutdown are not observed.
+	Observer Observer
 	// Concurrency is the maximum number of probes running at once. Values <= 0
 	// use defaultConcurrency.
 	Concurrency int
@@ -66,12 +88,13 @@ type job struct {
 
 // Scheduler runs probes for a set of targets.
 type Scheduler struct {
-	clock  clock.Clock
-	store  *store.Store
-	sem    chan struct{}
-	logger *slog.Logger
-	jobs   []*job
-	wg     sync.WaitGroup
+	clock    clock.Clock
+	store    *store.Store
+	observer Observer
+	sem      chan struct{}
+	logger   *slog.Logger
+	jobs     []*job
+	wg       sync.WaitGroup
 }
 
 // New creates a Scheduler from opts.
@@ -89,10 +112,11 @@ func New(opts Options) *Scheduler {
 		clk = clock.Real{}
 	}
 	return &Scheduler{
-		clock:  clk,
-		store:  opts.Store,
-		sem:    make(chan struct{}, concurrency),
-		logger: logger,
+		clock:    clk,
+		store:    opts.Store,
+		observer: opts.Observer,
+		sem:      make(chan struct{}, concurrency),
+		logger:   logger,
 	}
 }
 
@@ -212,12 +236,18 @@ func (s *Scheduler) execute(ctx context.Context, j *job) {
 	prev, existed := s.store.Get(j.spec.Name)
 	changed := !existed || prev.Result.Success != result.Success
 
-	s.store.Set(store.Record{
+	rec := store.Record{
 		Target: j.spec.Name,
 		Type:   j.spec.Type,
 		Labels: j.spec.Labels,
 		Result: result,
-	})
+	}
+	s.store.Set(rec)
+	if s.observer != nil {
+		// Feed observation-based metrics (e.g. latency histograms) at probe time,
+		// so every probe is captured — not only the last one seen at scrape time.
+		s.observer.Observe(rec)
+	}
 	s.logResult(j, result, changed)
 }
 

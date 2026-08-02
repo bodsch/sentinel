@@ -332,30 +332,40 @@ func cmdScrape(args []string) {
 //	sentinel_http_download_duration_seconds      <-> probe_http_duration_seconds{phase="transfer"}
 //	sentinel_probe_duration_seconds              <-> probe_duration_seconds
 //
+// sentinel_http_ttfb_seconds and sentinel_probe_duration_seconds are histograms
+// (fed at probe time); their per-tick sample is the mean of the probes since the
+// previous scrape, from the _sum/_count delta. The other phases are gauges.
+//
 // Caveat: Sentinel reports the final redirect hop; blackbox sums phases across
 // all hops. For targets with redirects the per-phase values diverge (the total
 // stays comparable), so redirect counts are printed alongside.
 // ---------------------------------------------------------------------------
 
 // phaseMap pairs a display label with the blackbox phase and Sentinel metric.
+// hist marks Sentinel metrics that are histograms (fed at probe time) rather than
+// last-value gauges: for those, the per-tick sample is the mean latency of the
+// probes since the previous scrape, derived from the _sum/_count delta.
 type phaseMap struct {
 	label string
 	bb    string // blackbox probe_http_duration_seconds phase label
 	sent  string // sentinel metric name
+	hist  bool   // sentinel metric is a histogram (read via _sum/_count delta)
 }
 
 var comparePhases = []phaseMap{
-	{"dns", "resolve", "sentinel_http_dns_duration_seconds"},
-	{"connect", "connect", "sentinel_http_tcp_connect_duration_seconds"},
-	{"tls", "tls", "sentinel_http_tls_handshake_duration_seconds"},
-	{"ttfb", "processing", "sentinel_http_ttfb_seconds"},
-	{"download", "transfer", "sentinel_http_download_duration_seconds"},
+	{"dns", "resolve", "sentinel_http_dns_duration_seconds", false},
+	{"connect", "connect", "sentinel_http_tcp_connect_duration_seconds", false},
+	{"tls", "tls", "sentinel_http_tls_handshake_duration_seconds", false},
+	{"ttfb", "processing", "sentinel_http_ttfb_seconds", true},
+	{"download", "transfer", "sentinel_http_download_duration_seconds", false},
 }
 
 // compareTarget accumulates per-phase samples (in ms) for one target.
 type compareTarget struct {
 	name, url  string
 	sent, bb   map[string][]float64 // phase label (+ "total") -> samples
+	prevSum    map[string]float64   // last histogram _sum per phase key
+	prevCount  map[string]float64   // last histogram _count per phase key
 	sentRedir  float64
 	bbRedir    float64
 	sentStatus float64
@@ -363,7 +373,27 @@ type compareTarget struct {
 }
 
 func newCompareTarget(name, u string) *compareTarget {
-	return &compareTarget{name: name, url: u, sent: map[string][]float64{}, bb: map[string][]float64{}}
+	return &compareTarget{
+		name: name, url: u,
+		sent: map[string][]float64{}, bb: map[string][]float64{},
+		prevSum: map[string]float64{}, prevCount: map[string]float64{},
+	}
+}
+
+// observeHist reads a Sentinel histogram's _sum/_count for this target and, if new
+// observations arrived since the last scrape, appends their mean latency (ms) as
+// the sample for key. This mirrors the gauge path (one sample per scrape) while
+// correctly reading the histogram form.
+func (t *compareTarget) observeHist(snap, key, name string) {
+	sum, count, ok := parseHistogramSumCount(snap, name, t.name)
+	if !ok {
+		return
+	}
+	dSum, dCount := sum-t.prevSum[key], count-t.prevCount[key]
+	t.prevSum[key], t.prevCount[key] = sum, count
+	if dCount > 0 {
+		t.sent[key] = append(t.sent[key], dSum/dCount*1000)
+	}
 }
 
 func cmdCompare(args []string) {
@@ -417,13 +447,14 @@ func cmdCompare(args []string) {
 		snap := httpGet(client, sentURL)
 		for _, t := range targets {
 			for _, ph := range comparePhases {
-				if v, ok := parseLabeled(snap, ph.sent, t.name); ok {
+				if ph.hist {
+					t.observeHist(snap, ph.label, ph.sent)
+				} else if v, ok := parseLabeled(snap, ph.sent, t.name); ok {
 					t.sent[ph.label] = append(t.sent[ph.label], v*1000)
 				}
 			}
-			if v, ok := parseLabeled(snap, "sentinel_probe_duration_seconds", t.name); ok {
-				t.sent["total"] = append(t.sent["total"], v*1000)
-			}
+			// probe_duration_seconds is a histogram (total run duration).
+			t.observeHist(snap, "total", "sentinel_probe_duration_seconds")
 			if v, ok := parseLabeled(snap, "sentinel_http_redirects", t.name); ok {
 				t.sentRedir = v
 			}
@@ -524,6 +555,17 @@ func parseLabeled(body, name, target string) (float64, bool) {
 		return v, err == nil
 	}
 	return 0, false
+}
+
+// parseHistogramSumCount reads a Prometheus histogram's _sum and _count series for
+// the given target. It returns ok=false unless both are present.
+func parseHistogramSumCount(body, name, target string) (sum, count float64, ok bool) {
+	s, okS := parseLabeled(body, name+"_sum", target)
+	c, okC := parseLabeled(body, name+"_count", target)
+	if !okS || !okC {
+		return 0, 0, false
+	}
+	return s, c, true
 }
 
 // ---------------------------------------------------------------------------

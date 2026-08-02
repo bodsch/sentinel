@@ -87,7 +87,8 @@ func TestHTTPCollector(t *testing.T) {
 		{"sentinel_http_status_code", 200},
 		{"sentinel_http_dns_duration_seconds", 0.005},
 		{"sentinel_http_tls_handshake_duration_seconds", 0.035},
-		{"sentinel_http_ttfb_seconds", 0.08},
+		// sentinel_http_ttfb_seconds is now a histogram fed by TTFBObserver
+		// (see histogram_test.go), no longer a collector gauge.
 		{"sentinel_http_redirects", 1},
 		{"sentinel_tls_certificate_remaining_days", 42},
 		{"sentinel_tls_certificate_valid", 1},

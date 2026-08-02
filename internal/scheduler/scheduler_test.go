@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -36,6 +37,7 @@ type fakeProber struct {
 	block   chan struct{} // if non-nil, Probe blocks until closed or ctx done
 	result  probe.Result
 	tracker *concTracker
+	onProbe func() // if non-nil, called inside Probe (e.g. to cancel the context)
 }
 
 func (f *fakeProber) Type() string { return "http" }
@@ -45,6 +47,9 @@ func (f *fakeProber) Probe(ctx context.Context) probe.Result {
 	if f.tracker != nil {
 		f.tracker.enter()
 		defer f.tracker.leave()
+	}
+	if f.onProbe != nil {
+		f.onProbe()
 	}
 	if f.block != nil {
 		select {
@@ -157,6 +162,69 @@ func TestExecuteDiscardsOnCancel(t *testing.T) {
 
 	if st.Len() != 0 {
 		t.Fatalf("expected no stored result on a cancelled context, got %d", st.Len())
+	}
+}
+
+// recordingObserver captures observed records for assertions.
+type recordingObserver struct {
+	mu   sync.Mutex
+	recs []store.Record
+}
+
+func (o *recordingObserver) Observe(r store.Record) {
+	o.mu.Lock()
+	o.recs = append(o.recs, r)
+	o.mu.Unlock()
+}
+
+func (o *recordingObserver) count() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return len(o.recs)
+}
+
+func TestExecuteNotifiesObserver(t *testing.T) {
+	t.Parallel()
+
+	st := store.New()
+	obs := &recordingObserver{}
+	p := &fakeProber{tracker: &concTracker{}, result: probe.Result{Success: true, Duration: 42 * time.Millisecond}}
+	s := New(Options{Store: st, Observer: obs, Concurrency: 10})
+	j := &job{spec: JobSpec{Name: "x", Type: "http", Prober: p}}
+
+	s.execute(context.Background(), j)
+
+	obs.mu.Lock()
+	defer obs.mu.Unlock()
+	if len(obs.recs) != 1 {
+		t.Fatalf("observer calls = %d, want 1", len(obs.recs))
+	}
+	if got := obs.recs[0]; got.Target != "x" || got.Result.Duration != 42*time.Millisecond {
+		t.Errorf("observed record = %+v, want target x / 42ms", got)
+	}
+}
+
+func TestExecuteDoesNotNotifyObserverOnCancel(t *testing.T) {
+	t.Parallel()
+
+	st := store.New()
+	obs := &recordingObserver{}
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel *during* Probe: the semaphore is acquired first (ctx still live at
+	// the top select), then the probe cancels, so execute() deterministically
+	// reaches the post-probe discard guard. Cancelling before execute would race
+	// the sem-acquire-vs-ctx.Done select and only reach the guard ~half the time.
+	p := &fakeProber{tracker: &concTracker{}, result: probe.Result{Success: true}, onProbe: cancel}
+	s := New(Options{Store: st, Observer: obs, Concurrency: 10})
+	j := &job{spec: JobSpec{Name: "x", Type: "http", Prober: p}}
+
+	s.execute(ctx, j)
+
+	if st.Len() != 0 {
+		t.Errorf("stored %d results on a shutdown-cancelled probe, want 0", st.Len())
+	}
+	if n := obs.count(); n != 0 {
+		t.Errorf("observer called %d times on a shutdown-cancelled probe, want 0", n)
 	}
 }
 

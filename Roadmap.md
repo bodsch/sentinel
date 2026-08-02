@@ -113,7 +113,12 @@ Planned:
 
 Planned:
 
-- histogram support (latency distributions, fed at probe time)
+- ~~histogram support (latency distributions, fed at probe time)~~
+  **(implemented)**. `sentinel_probe_duration_seconds` (all types) and
+  `sentinel_http_ttfb_seconds` are now histograms fed at probe time via the
+  scheduler's observer hook, capturing every probe (not just the last one seen
+  at scrape). They replaced the 0.1 gauges of the same name. See `metrics.md` →
+  *Histograms*.
 - in-probe retry with retry metrics
 - ~~scrape performance at high target counts~~ **(addressed)**. `/metrics`
   rendering is O(N) (~259 ms at N=10000 — see `docs/benchmark-vs-blackbox.md`,
