@@ -7,3 +7,6 @@ coverage.out
 
 # Local, machine-specific Claude Code settings
 .claude/settings.local.json
+
+# Local, machine-specific config (not for version control)
+*.local.yaml
