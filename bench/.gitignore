@@ -1,0 +1,5 @@
+# Downloaded blackbox_exporter, built benchtool, and per-run artefacts.
+.cache/
+run/
+logs/
+results.txt

@@ -59,6 +59,10 @@ bench: ## Run micro-benchmarks (no tests) with allocation stats.
 scaling: ## Run the scaling profile (goroutines/heap/scrape latency at N targets).
 	SENTINEL_SCALING=1 $(GO) test -run TestScalingProfile -v -count=1 ./cmd/sentinel/
 
+.PHONY: benchmark
+benchmark: ## Run the Sentinel vs blackbox_exporter benchmark harness (see bench/).
+	bench/run.sh
+
 .PHONY: fmt
 fmt: ## Format all Go source.
 	$(GO) fmt ./...

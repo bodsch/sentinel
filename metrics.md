@@ -466,6 +466,49 @@ Values:
 
 ---
 
+## Runtime / Self-Observability Metrics
+
+Sentinel exposes the standard Go runtime and process collectors so its own
+health can be monitored alongside the probe results. They are registered in
+production via `metrics.RegisterRuntimeCollectors` and are intentionally kept
+off test/benchmark registries.
+
+Go runtime (all platforms):
+
+```
+go_goroutines
+go_threads
+go_memstats_alloc_bytes
+go_memstats_heap_inuse_bytes
+go_gc_duration_seconds
+```
+
+Process (Linux exposes the full set; macOS reports a subset — see below):
+
+```
+process_cpu_seconds_total
+process_open_fds
+process_max_fds
+process_start_time_seconds
+process_resident_memory_bytes   # Linux only
+process_virtual_memory_bytes    # Linux only
+```
+
+> **Platform note:** `process_resident_memory_bytes` and
+> `process_virtual_memory_bytes` are reported on Linux (the primary deployment
+> target). On macOS the process collector still exposes CPU, file-descriptor,
+> and start-time series but omits the resident/virtual memory gauges.
+
+Typical operational queries:
+
+```
+rate(process_cpu_seconds_total[5m])   # Sentinel's own CPU usage
+go_goroutines                         # goroutine growth / leaks
+process_resident_memory_bytes         # RSS trend as target count grows
+```
+
+---
+
 ## Histograms
 
 > **Version note:** Histograms are a **0.2** feature. Version 0.1 exposes the current-value state
