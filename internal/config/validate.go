@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/ohler55/ojg/jp"
 )
 
 // Validate checks the resolved configuration for structural and semantic errors.
@@ -231,6 +233,10 @@ func validateHTTP(label string, h *HTTPConfig) []error {
 		errs = append(errs, fmt.Errorf("config: %s: http.body is not allowed with method %s", label, h.Method))
 	}
 
+	if h.Method == "HEAD" && len(h.Expect.JSON) > 0 {
+		errs = append(errs, fmt.Errorf("config: %s: http.expect.json needs a response body and cannot be used with method HEAD", label))
+	}
+
 	if h.ResolvedMaxRedirects() < 0 {
 		errs = append(errs, fmt.Errorf("config: %s: http.max_redirects must not be negative", label))
 	}
@@ -253,6 +259,16 @@ func validateHTTP(label string, h *HTTPConfig) []error {
 		}
 		if _, err := regexp.Compile(pattern); err != nil {
 			errs = append(errs, fmt.Errorf("config: %s: http.expect.body_regex %q does not compile: %v", label, pattern, err))
+		}
+	}
+
+	for i, jx := range h.Expect.JSON {
+		if strings.TrimSpace(jx.Path) == "" {
+			errs = append(errs, fmt.Errorf("config: %s: http.expect.json[%d].path is required", label, i))
+			continue
+		}
+		if _, perr := jp.ParseString(jx.Path); perr != nil {
+			errs = append(errs, fmt.Errorf("config: %s: http.expect.json[%d].path %q is not valid JSONPath: %v", label, i, jx.Path, perr))
 		}
 	}
 

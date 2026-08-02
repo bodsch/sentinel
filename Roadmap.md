@@ -157,7 +157,10 @@ Planned:
   applied same-host-only for leak safety. Secrets are inline; **planned
   follow-up**: `password_file` / `bearer_token_file` (and/or env references) so
   credentials need not live in the config and `--validate` can run without them.
-- JSONPath validation
+- ~~JSONPath validation~~ **(implemented)**: `http.expect.json` — a list of
+  `{path, equals}` JSONPath assertions on a JSON response body (existence and
+  scalar equality), via `github.com/ohler55/ojg` (zero transitive deps). See
+  `configuration.md`.
 - XPath validation
 - body size validation
 - compression analysis

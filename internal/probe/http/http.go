@@ -23,6 +23,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ohler55/ojg/jp"
+
 	"bodsch.me/sentinel/internal/probe"
 	"bodsch.me/sentinel/internal/validator"
 	"bodsch.me/sentinel/pkg/version"
@@ -60,6 +62,8 @@ type Options struct {
 	BodyRegex []string
 	// Headers are exact response-header expectations.
 	Headers map[string]string
+	// JSONChecks are JSONPath assertions on a JSON response body.
+	JSONChecks []JSONCheck
 
 	// RequestHeaders are headers sent with the request. A "Host" key sets the
 	// request host. For security they are applied only to the target's own host,
@@ -74,6 +78,13 @@ type Options struct {
 	// Body is the request body sent with the initial request. Redirects are
 	// followed as GET with no body.
 	Body string
+}
+
+// JSONCheck is one JSONPath assertion (raw path plus an optional expected scalar
+// value); the prober compiles the path into a validator.
+type JSONCheck struct {
+	Path   string
+	Equals *string
 }
 
 // Prober runs HTTP checks for a single target. It satisfies probe.Prober.
@@ -210,6 +221,18 @@ func buildValidators(opts Options) ([]validator.Validator, error) {
 
 	if len(opts.Headers) > 0 {
 		vs = append(vs, validator.NewHeader(opts.Headers))
+	}
+
+	if len(opts.JSONChecks) > 0 {
+		checks := make([]validator.JSONPathCheck, 0, len(opts.JSONChecks))
+		for _, c := range opts.JSONChecks {
+			expr, err := jp.ParseString(c.Path)
+			if err != nil {
+				return nil, fmt.Errorf("http probe %q: json path %q: %w", opts.Name, c.Path, err)
+			}
+			checks = append(checks, validator.JSONPathCheck{Expr: expr, Path: c.Path, Equals: c.Equals})
+		}
+		vs = append(vs, validator.NewJSONPath(checks))
 	}
 
 	return vs, nil

@@ -7,7 +7,37 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"bodsch.me/sentinel/internal/probe"
 )
+
+func TestJSONPathValidationEndToEnd(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"status":"ok","code":200}`))
+	}))
+	defer srv.Close()
+
+	ok := "ok"
+	opts := baseOpts(srv.URL)
+	opts.JSONChecks = []JSONCheck{{Path: "$.status", Equals: &ok}, {Path: "$.code"}}
+	if res := runProbe(t, opts); !res.Success {
+		t.Fatalf("expected JSON checks to pass, got %s", res.FailureReason)
+	}
+
+	nope := "nope"
+	opts.JSONChecks = []JSONCheck{{Path: "$.status", Equals: &nope}}
+	res := runProbe(t, opts)
+	if res.Success {
+		t.Fatal("expected a JSON mismatch failure")
+	}
+	if res.FailureReason != probe.ReasonValidationFailed {
+		t.Errorf("reason = %q, want validation_failed", res.FailureReason)
+	}
+}
 
 func TestPostBodySent(t *testing.T) {
 	t.Parallel()

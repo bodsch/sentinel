@@ -141,6 +141,16 @@ type Expect struct {
 	Status    int               `yaml:"status"`
 	BodyRegex []string          `yaml:"body_regex"`
 	Headers   map[string]string `yaml:"headers"`
+	// JSON holds JSONPath assertions on a JSON response body.
+	JSON []JSONExpect `yaml:"json"`
+}
+
+// JSONExpect is one JSONPath assertion on a JSON response body: the path must
+// resolve, and when Equals is set the resolved scalar value (compared as a
+// string) must equal it. Omitting Equals makes it an existence check.
+type JSONExpect struct {
+	Path   string  `yaml:"path"`
+	Equals *string `yaml:"equals"`
 }
 
 // DNSConfig describes a DNS check: a query of a given type against a given
