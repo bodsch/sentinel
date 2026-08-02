@@ -77,9 +77,7 @@ defaults:
 
 
 targets:
-
   - name: homepage
-
     http:
       url: https://example.org
 ```
@@ -92,17 +90,11 @@ Sentinel loads configuration in the following order:
 
 ```
 Global Defaults
-
         |
-
 Templates
-
         |
-
 Target Configuration
-
         |
-
 Runtime Overrides
 ```
 
@@ -114,27 +106,26 @@ Later values override previous values.
 
 Defaults avoid repeating common settings.
 
-Example:
+Example (0.1 fields):
 
 ```
 defaults:
-
   interval: 30s
-
   timeout: 10s
-
-  retries: 2
-
   http:
-
+    method: GET
     follow_redirects: true
-
     max_redirects: 10
-
-    validate_tls: true
+    max_body_bytes: 1048576
 ```
 
 All targets inherit these settings.
+
+> **Note:** `retries` (see Retry Configuration) is a 0.2+ field and is rejected
+> by the 0.1 loader. There is no `validate_tls` field: in 0.1 TLS is always
+> inspected for HTTPS targets (expiry, hostname, remaining days) — see the TLS
+> section. Unknown fields fail validation, so keep example configs to the fields
+> your version supports.
 
 ---
 
@@ -150,17 +141,11 @@ Example:
 
 ```
 templates:
-
   web-service:
-
     interval: 30s
-
     timeout: 5s
-
     http:
-
       expect:
-
         status: 200
 ```
 
@@ -168,13 +153,9 @@ Usage:
 
 ```
 targets:
-
   - name: frontend
-
     template: web-service
-
     http:
-
       url: https://frontend.example.org
 ```
 
@@ -188,23 +169,13 @@ Example:
 
 ```
 targets:
-
   - name: api
-
     tags:
-
       service: backend
-
       environment: production
-
-
     interval: 15s
-
-
     http:
-
       url: https://api.example.org
-
       method: GET
 ```
 ---
@@ -216,11 +187,8 @@ Metadata is used for organization and filtering.
 Example:
 ```
 tags:
-
   service: payment
-
   environment: production
-
   location: datacenter-1
 ```
 In 0.1 only tags from a **fixed allowed set** become Prometheus labels: `environment`, `location`,
@@ -232,20 +200,19 @@ Free-form tags-as-labels, with sanitizing and governance, are a 0.2+ feature.
 
 ## HTTP Configuration
 
-Example:
+`timeout` is a **target-level** field (a single total timeout), not part of the
+`http` block. The `http` block holds request/response settings:
 
 ```
-http:
-
-  url: https://example.org
-
-  method: GET
-
-  timeout: 10s
-
-  follow_redirects: true
-
-  max_redirects: 10
+targets:
+  - name: homepage
+    timeout: 10s          # target-level total timeout
+    http:
+      url: https://example.org
+      method: GET         # GET or HEAD in 0.1
+      follow_redirects: true
+      max_redirects: 10
+      max_body_bytes: 1048576
 ```
 
 ---
@@ -258,17 +225,11 @@ Example:
 
 ```
 http:
-
   expect:
-
     status: 200
-
     body_regex:
-
       - "Welcome"
-
     headers:
-
       Content-Type: "text/html"
 ```
 
@@ -283,14 +244,9 @@ Example:
 
 ```
 http:
-
   url: https://api.example.org/status
-
-
   expect:
-
     json:
-
       "$.status": "healthy"
 ```
 
@@ -303,11 +259,8 @@ http:
 Example:
 ```
 http:
-
   expect:
-
     xpath:
-
       "//title": "Dashboard"
 ```
 ---
@@ -318,15 +271,10 @@ Example:
 
 ```
 dns:
-
   server: 1.1.1.1
-
   query: example.org
-
   type: A
-
   expected:
-
     - 93.184.216.34
 ```
 
@@ -350,17 +298,13 @@ Future:
 Example:
 ```
 tcp:
-
   address: mail.example.org:25
-
   timeout: 5s
 ```
 Optional banner validation:
 ```
 tcp:
-
   expect:
-
     banner: "ESMTP"
 ```
 ---
@@ -370,11 +314,8 @@ tcp:
 Example:
 ```
 icmp:
-
   host: router.example.org
-
   count: 5
-
   timeout: 3s
 ```
 Metrics:
@@ -392,13 +333,9 @@ TLS checks can be standalone or attached to HTTPS.
 Example:
 ```
 tls:
-
   host: example.org
-
   port: 443
-
   validate_chain: true
-
   minimum_days_remaining: 30
 ```
 ---
@@ -410,14 +347,9 @@ Each target can override intervals.
 Example:
 ```
 targets:
-
   - name: critical-api
-
     interval: 5s
-
-
   - name: documentation
-
     interval: 5m
 ```
 ---
@@ -433,26 +365,18 @@ Transient failures should not immediately trigger alerts.
 Example:
 ```
 retry:
-
   attempts: 3
-
   delay: 5s
 ```
 Execution:
 
 ```
 Attempt 1
-
    |
-
 Failure
-
    |
-
 Wait 5 seconds
-
    |
-
 Attempt 2
 ```
 
@@ -475,13 +399,9 @@ timeout: 10s
 
 ```
 timeout:
-
   total: 10s
-
   dns: 2s
-
   connect: 3s
-
   tls: 5s
 ```
 ---
@@ -497,9 +417,7 @@ In 0.1 Sentinel honours the standard `HTTP_PROXY` / `HTTPS_PROXY` environment va
 
 ```
 http:
-
   proxy:
-
     url: http://proxy.example.org:3128
 ```
 ---
@@ -510,7 +428,6 @@ Explicit protocol selection:
 
 ```
 network:
-
   ip_version: ipv4
 ```
 
@@ -547,7 +464,7 @@ unknown field "status_codee"
 
 ---
 
-## Hot Reload (0.2+)
+## Hot Reload (only an idea, not planned before 0.8+)
 
 > Not implemented in 0.1. Config is loaded once at startup; to apply changes, restart the process
 > (cheap under systemd/Kubernetes). Diff-based hot reload is a later feature.
@@ -558,21 +475,13 @@ Process:
 
 ```
 New Configuration
-
         |
-
 Validation
-
         |
-
 Diff Calculation
-
         |
-
 Apply Changes
-
         |
-
 Continue Monitoring
 ```
 
@@ -595,55 +504,46 @@ Possible future configuration sources:
 
 ## Complete Example
 
-```
+A complete, **0.1-valid** example that passes `--validate`:
+
+```yaml
 defaults:
-
   interval: 30s
-
   timeout: 10s
-
-
-templates:
-
-  website:
-
-    http:
-
-      expect:
-
-        status: 200
-
-
+  http:
+    method: GET
+    follow_redirects: true
+    max_redirects: 10
+    max_body_bytes: 1048576
 
 targets:
 
-
   - name: homepage
-
-    template: website
-
-
     tags:
-
       service: frontend
-
-
+      environment: production
     http:
-
       url: https://example.org
-
-
-
-  - name: smtp
-
-    tcp:
-
-      address: mail.example.org:25
-
       expect:
+        status: 200
 
-        banner: "ESMTP"
+  - name: api-health
+    interval: 15s
+    tags:
+      service: backend
+      environment: production
+    http:
+      url: https://api.example.org/health
+      expect:
+        status: 200
+        headers:
+          Content-Type: application/json
 ```
+
+> The repository ships `config.example.yaml`, which is kept valid by an automated
+> test — use it as the authoritative, always-current example. The earlier
+> template/TCP-based example was removed because templates and non-HTTP protocols
+> are 0.2+ and are rejected by the 0.1 loader.
 
 ---
 

@@ -255,13 +255,10 @@ Distributed Monitoring
 Multiple Sentinel agents:
 
                  Central Prometheus
-
                       ^
                       |
         +-------------+-------------+
-
         |                           |
-
     Sentinel Agent A          Sentinel Agent B
     Europe                    US
 
@@ -356,17 +353,11 @@ Sentinel:
 
 ```
 Continuous scheduler
-
        |
-
 Execute probes
-
        |
-
 Maintain state
-
        |
-
 Expose metrics
 ```
 
@@ -402,9 +393,7 @@ A Sentinel installation should be:
 
 ```
 single binary
-
 +
-
 configuration file
 ```
 

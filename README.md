@@ -243,26 +243,18 @@ Architecture Overview
         |                 |                |
         v                 v                v
      HTTP Probe       DNS Probe       TCP Probe
-
                           |
                           v
-
                      Validation Pipeline
-
                           |
                           v
-
                    Metrics Collector
-
                           |
                           v
-
                    /metrics Endpoint
-
                           |
                           v
-
-                   Prometheus
+                      Prometheus
 
 ---
 
@@ -270,34 +262,21 @@ Architecture Overview
 
 ```yaml
 targets:
-
   - name: homepage
-
     interval: 30s
-
     http:
       url: https://example.org
-
       expect:
         status: 200
         body_regex: "Welcome"
-
-
   - name: smtp-server
-
     interval: 60s
-
     tcp:
       address: mail.example.org:25
-
       expect:
         banner: "ESMTP"
-
-
   - name: dns-check
-
     interval: 30s
-
     dns:
       server: 1.1.1.1
       query: example.org
@@ -324,7 +303,7 @@ sentinel_http_ttfb_seconds{
 
 ---
 
-## Future Features
+## Future (maybe) Improvements
 
 Planned improvements:
 

@@ -196,7 +196,12 @@ http_status_error
 validation_failed
 
 timeout
+
+network_error
 ```
+
+`network_error` is the catch-all for network-level failures that do not match a
+more specific reason, so an unusual error is never silently misclassified.
 
 Example:
 

@@ -197,29 +197,17 @@ Pipeline:
 
 ```
 DNS Resolution
-
     |
-
 TCP Connect
-
     |
-
 TLS Handshake
-
     |
-
 HTTP Request
-
     |
-
 Redirect Handling
-
     |
-
 Response Validation
-
     |
-
 Metrics Collection
 ```
 
@@ -317,12 +305,9 @@ Example:
 
 ```
 expect:
-
   status: 200
-
   body_regex:
     - "healthy"
-
   headers:
     X-Service: "frontend"
 ```
@@ -438,16 +423,12 @@ Recommended structure:
 
 ```
 Main Process
-
     |
     +-- Scheduler Goroutine
-
     |
     +-- Worker Pool
-
           |
           +-- Probe Execution Context
-
           |
           +-- Timeout Context
 ```
