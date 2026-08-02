@@ -10,6 +10,7 @@ package metrics
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 
 	"bodsch.me/sentinel/internal/store"
 	"bodsch.me/sentinel/pkg/version"
@@ -55,4 +56,29 @@ func NewRegistry() *prometheus.Registry {
 	reg.MustRegister(buildInfo)
 
 	return reg
+}
+
+// RegisterRuntimeCollectors adds the standard Go runtime and process collectors
+// to reg, exposing self-observability for the Sentinel process itself:
+// go_goroutines, go_memstats_*, go_gc_*, process_resident_memory_bytes,
+// process_cpu_seconds_total, process_open_fds, and so on.
+//
+// It is deliberately kept out of NewRegistry so that unit tests and benchmarks
+// get a clean, deterministic registry; production wires it in explicitly. The
+// process collector reads OS-level counters; its coverage is platform-dependent.
+// On Linux (the primary deployment target) it exposes the full set including
+// process_resident_memory_bytes and process_virtual_memory_bytes. On macOS a
+// subset is reported (process_cpu_seconds_total, process_open_fds,
+// process_max_fds, process_start_time_seconds) while the resident/virtual memory
+// gauges are absent; it registers without error either way, keeping builds and
+// tests portable.
+//
+// Parameters:
+//   - reg: the registry to register the runtime collectors on.
+//
+// It panics (via MustRegister) if a collector is already registered, which
+// would indicate a wiring bug rather than a runtime condition.
+func RegisterRuntimeCollectors(reg *prometheus.Registry) {
+	reg.MustRegister(collectors.NewGoCollector())
+	reg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 }

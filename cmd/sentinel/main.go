@@ -148,6 +148,9 @@ func serve(cfg options, loaded *config.Config, logger *slog.Logger) int {
 	reg.MustRegister(httpprobe.NewCollector(st))
 	reg.MustRegister(dnsprobe.NewCollector(st))
 
+	// Expose the process's own runtime health (goroutines, heap, GC, CPU, FDs).
+	metrics.RegisterRuntimeCollectors(reg)
+
 	srv := server.New(server.Options{Addr: cfg.listen, Registry: reg, Logger: logger})
 	if err := srv.Start(); err != nil {
 		logger.Error("starting metrics server", slog.Any("error", err))
