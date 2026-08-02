@@ -78,3 +78,27 @@ targets:
       follow_redirects: false
       expect:
         status: 200
+
+  # DNS target (0.2): resolve an A record via a specific resolver and check it.
+  - name: dns-a-record
+    interval: 30s
+    tags:
+      service: dns
+      environment: production
+    dns:
+      server: 1.1.1.1
+      query: example.org
+      type: A
+      expected:
+        - 93.184.216.34
+
+  # DNS MX check (no expected values: success = NOERROR, count via metrics).
+  - name: dns-mx-record
+    interval: 1m
+    tags:
+      service: dns
+      environment: production
+    dns:
+      server: 1.1.1.1
+      query: example.org
+      type: MX

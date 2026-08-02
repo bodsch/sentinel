@@ -71,7 +71,18 @@ func (c *Config) applyDefaults() {
 		if t.HTTP != nil {
 			applyHTTPDefaults(t.HTTP, c.Defaults.HTTP)
 		}
+		if t.DNS != nil {
+			applyDNSDefaults(t.DNS)
+		}
 	}
+}
+
+// applyDNSDefaults normalises the record type (uppercase) and defaults it to A.
+func applyDNSDefaults(d *DNSConfig) {
+	if d.Type == "" {
+		d.Type = defaultDNSType
+	}
+	d.Type = strings.ToUpper(d.Type)
 }
 
 // resolveDuration picks the effective duration: the target value if set,

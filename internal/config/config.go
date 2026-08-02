@@ -28,7 +28,16 @@ const (
 	defaultTimeout      = 10 * time.Second
 	defaultMethod       = "GET"
 	defaultMaxRedirects = 10
+	defaultDNSType      = "A"
 )
+
+// AllowedDNSTypes is the set of DNS record types supported in 0.2.
+var AllowedDNSTypes = map[string]struct{}{
+	"A":    {},
+	"AAAA": {},
+	"MX":   {},
+	"TXT":  {},
+}
 
 // AllowedLabelTags is the fixed set of target tag keys that may become Prometheus
 // labels. Any tag outside this set is rejected during validation to prevent
@@ -66,8 +75,8 @@ type HTTPDefaults struct {
 	MaxBodyBytes    *int64 `yaml:"max_body_bytes"`
 }
 
-// Target is one monitored endpoint. In 0.1 exactly one protocol block (HTTP)
-// must be present.
+// Target is one monitored endpoint. Exactly one protocol block must be present
+// (HTTP or DNS).
 //
 // Interval and Timeout are pointers so an explicitly configured non-positive
 // value can be told apart from "unset". The effective values, after merging
@@ -78,6 +87,7 @@ type Target struct {
 	Timeout  *Duration         `yaml:"timeout"`
 	Tags     map[string]string `yaml:"tags"`
 	HTTP     *HTTPConfig       `yaml:"http"`
+	DNS      *DNSConfig        `yaml:"dns"`
 
 	// resolved effective values, filled by applyDefaults.
 	resolvedInterval time.Duration
@@ -109,6 +119,20 @@ type Expect struct {
 	Status    int               `yaml:"status"`
 	BodyRegex []string          `yaml:"body_regex"`
 	Headers   map[string]string `yaml:"headers"`
+}
+
+// DNSConfig describes a DNS check: a query of a given type against a given
+// resolver, optionally validated against expected answers.
+type DNSConfig struct {
+	// Server is the resolver to query, "host" or "host:port" (default port 53).
+	Server string `yaml:"server"`
+	// Query is the name to look up (e.g. "example.org").
+	Query string `yaml:"query"`
+	// Type is the record type: A, AAAA, MX or TXT. Defaults to A.
+	Type string `yaml:"type"`
+	// Expected is an optional set of expected answer strings. When set, at least
+	// one answer must match one expected value.
+	Expected []string `yaml:"expected"`
 }
 
 // Duration is a time.Duration that unmarshals from a Go duration string such as

@@ -21,14 +21,21 @@ func TestExampleConfigIsValid(t *testing.T) {
 		t.Fatal("example config has no targets")
 	}
 
-	// Every target must have a resolved HTTP block after Load.
+	// Every target must have exactly one resolved protocol block after Load.
 	for _, tg := range cfg.Targets {
-		if tg.HTTP == nil {
-			t.Errorf("target %q has no resolved HTTP block", tg.Name)
-			continue
-		}
-		if tg.HTTP.Method != "GET" && tg.HTTP.Method != "HEAD" {
-			t.Errorf("target %q resolved to unexpected method %q", tg.Name, tg.HTTP.Method)
+		switch {
+		case tg.HTTP != nil && tg.DNS != nil:
+			t.Errorf("target %q has both HTTP and DNS blocks", tg.Name)
+		case tg.HTTP != nil:
+			if tg.HTTP.Method != "GET" && tg.HTTP.Method != "HEAD" {
+				t.Errorf("target %q resolved to unexpected method %q", tg.Name, tg.HTTP.Method)
+			}
+		case tg.DNS != nil:
+			if _, ok := AllowedDNSTypes[tg.DNS.Type]; !ok {
+				t.Errorf("target %q resolved to unexpected DNS type %q", tg.Name, tg.DNS.Type)
+			}
+		default:
+			t.Errorf("target %q has no protocol block", tg.Name)
 		}
 	}
 }

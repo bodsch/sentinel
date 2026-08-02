@@ -3,9 +3,11 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -56,15 +58,93 @@ func validateTarget(t *Target) []error {
 		errs = append(errs, fmt.Errorf("config: %s: timeout must be greater than zero", label))
 	}
 
-	// Exactly one protocol block; only HTTP is supported in 0.1.
-	if t.HTTP == nil {
-		errs = append(errs, fmt.Errorf("config: %s: no protocol block (only \"http\" is supported in 0.1)", label))
-	} else {
+	// Exactly one protocol block must be present.
+	protocols := 0
+	if t.HTTP != nil {
+		protocols++
+	}
+	if t.DNS != nil {
+		protocols++
+	}
+	switch {
+	case protocols == 0:
+		errs = append(errs, fmt.Errorf("config: %s: no protocol block (exactly one of \"http\", \"dns\" is required)", label))
+	case protocols > 1:
+		errs = append(errs, fmt.Errorf("config: %s: multiple protocol blocks (exactly one of \"http\", \"dns\" is allowed)", label))
+	}
+
+	if t.HTTP != nil {
 		errs = append(errs, validateHTTP(label, t.HTTP)...)
+	}
+	if t.DNS != nil {
+		errs = append(errs, validateDNS(label, t.DNS)...)
 	}
 
 	errs = append(errs, validateTags(label, t.Tags)...)
 	return errs
+}
+
+// validateDNS validates a resolved DNS block.
+func validateDNS(label string, d *DNSConfig) []error {
+	var errs []error
+
+	if strings.TrimSpace(d.Server) == "" {
+		errs = append(errs, fmt.Errorf("config: %s: dns.server is required", label))
+	} else if !validDNSServer(d.Server) {
+		errs = append(errs, fmt.Errorf("config: %s: dns.server %q is not a valid host or host:port", label, d.Server))
+	}
+
+	if strings.TrimSpace(d.Query) == "" {
+		errs = append(errs, fmt.Errorf("config: %s: dns.query is required", label))
+	}
+
+	if _, ok := AllowedDNSTypes[d.Type]; !ok {
+		errs = append(errs, fmt.Errorf("config: %s: dns.type %q is not supported (allowed: %s)", label, d.Type, allowedDNSTypesList()))
+	}
+
+	for _, e := range d.Expected {
+		if strings.TrimSpace(e) == "" {
+			errs = append(errs, fmt.Errorf("config: %s: dns.expected must not contain empty values", label))
+			break
+		}
+	}
+
+	return errs
+}
+
+// validDNSServer reports whether s is a bare host or a host:port. It rejects
+// obvious mistakes such as an embedded scheme ("http://…"), whitespace, a
+// non-numeric port, or a colon-bearing host that is not a valid IPv6 literal.
+func validDNSServer(s string) bool {
+	if s == "" || strings.ContainsAny(s, " \t\r\n/") {
+		return false
+	}
+	// host:port (or [ipv6]:port) — the host must be non-empty and the port a
+	// valid number.
+	if host, port, err := net.SplitHostPort(s); err == nil {
+		if host == "" {
+			return false
+		}
+		p, err := strconv.Atoi(port)
+		return err == nil && p >= 1 && p <= 65535
+	}
+	// No host:port. A colon here means it must be a bare IPv6 literal.
+	if strings.Contains(s, ":") {
+		return net.ParseIP(s) != nil
+	}
+	// Otherwise a bare host or IPv4 literal.
+	return true
+}
+
+// allowedDNSTypesList returns the allowed DNS types as a sorted, comma-separated
+// string for error messages.
+func allowedDNSTypesList() string {
+	keys := make([]string, 0, len(AllowedDNSTypes))
+	for k := range AllowedDNSTypes {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ", ")
 }
 
 // validateHTTP validates a resolved HTTP block.

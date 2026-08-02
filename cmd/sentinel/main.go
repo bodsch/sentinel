@@ -16,6 +16,8 @@ import (
 	"bodsch.me/sentinel/internal/config"
 	"bodsch.me/sentinel/internal/logging"
 	"bodsch.me/sentinel/internal/metrics"
+	"bodsch.me/sentinel/internal/probe"
+	dnsprobe "bodsch.me/sentinel/internal/probe/dns"
 	httpprobe "bodsch.me/sentinel/internal/probe/http"
 	"bodsch.me/sentinel/internal/scheduler"
 	"bodsch.me/sentinel/internal/server"
@@ -123,14 +125,14 @@ func serve(cfg options, loaded *config.Config, logger *slog.Logger) int {
 
 	for i := range loaded.Targets {
 		target := loaded.Targets[i]
-		prober, err := httpprobe.New(httpOptions(target))
+		prober, ptype, err := buildProber(target)
 		if err != nil {
 			logger.Error("building probe", slog.String("target", target.Name), slog.Any("error", err))
 			return exitError
 		}
 		spec := scheduler.JobSpec{
 			Name:     target.Name,
-			Type:     httpprobe.ProbeType,
+			Type:     ptype,
 			Interval: target.ResolvedInterval(),
 			Labels:   target.Tags,
 			Prober:   prober,
@@ -141,9 +143,10 @@ func serve(cfg options, loaded *config.Config, logger *slog.Logger) int {
 		}
 	}
 
-	// Register collectors: the generic probe collector plus the HTTP-specific one.
+	// Register collectors: the generic probe collector plus each protocol's own.
 	reg.MustRegister(metrics.NewProbeCollector(st, sched))
 	reg.MustRegister(httpprobe.NewCollector(st))
+	reg.MustRegister(dnsprobe.NewCollector(st))
 
 	srv := server.New(server.Options{Addr: cfg.listen, Registry: reg, Logger: logger})
 	if err := srv.Start(); err != nil {
@@ -183,6 +186,34 @@ func serve(cfg options, loaded *config.Config, logger *slog.Logger) int {
 
 	logger.Info("sentinel stopped")
 	return exitOK
+}
+
+// buildProber constructs the prober for a target based on which protocol block
+// is present, returning the prober and its type label.
+func buildProber(target config.Target) (probe.Prober, string, error) {
+	switch {
+	case target.HTTP != nil:
+		p, err := httpprobe.New(httpOptions(target))
+		return p, httpprobe.ProbeType, err
+	case target.DNS != nil:
+		p, err := dnsprobe.New(dnsOptions(target))
+		return p, dnsprobe.ProbeType, err
+	default:
+		return nil, "", fmt.Errorf("target %q has no protocol block", target.Name)
+	}
+}
+
+// dnsOptions maps a resolved config target to DNS prober options.
+func dnsOptions(target config.Target) dnsprobe.Options {
+	d := target.DNS
+	return dnsprobe.Options{
+		Name:     target.Name,
+		Server:   d.Server,
+		Query:    d.Query,
+		Type:     d.Type,
+		Expected: d.Expected,
+		Timeout:  target.ResolvedTimeout(),
+	}
 }
 
 // httpOptions maps a resolved config target to HTTP prober options.
