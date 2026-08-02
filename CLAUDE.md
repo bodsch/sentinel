@@ -19,8 +19,9 @@ er langsam/nicht erreichbar?" — über phasengenaue Diagnostik (DNS/TCP/TLS/TTF
 - TLS-Diagnostik (Ablauf, Hostname, verbleibende Tage)
 - Prometheus-Metriken über `/metrics`, Health-/Ready-Checks (`/healthz`, `/readyz`)
 
-Weitere Protokolle (DNS, TCP, ICMP, Mail, …) und Features sind in `Roadmap.md` für spätere Versionen
-vorgesehen. Version 0.1 ist bewusst ein schmaler vertikaler HTTP-Durchstich.
+Version 0.1 ist bewusst ein schmaler vertikaler HTTP-Durchstich. Version 0.2 ergänzt eine
+DNS-Probe (A/AAAA/MX/TXT). Weitere Protokolle (TCP, ICMP, Mail, …) und Features sind in `Roadmap.md`
+für spätere Versionen vorgesehen.
 
 ## Commands
 
@@ -152,7 +153,8 @@ Der Agent soll:
 ├── internal
 │   ├── config            # YAML load/validate, defaults merge, label allow-list
 │   ├── probe             # Prober interface, Result, FailureReason enum
-│   │   └── http          # HTTP probe: httptrace timings, redirects, TLS inspection
+│   │   ├── http          # HTTP probe: httptrace timings, redirects, TLS inspection
+│   │   └── dns           # DNS probe (0.2): miekg/dns, RCODE/answers, TCP fallback
 │   ├── validator         # Validator interface + status/regex/header
 │   ├── scheduler         # ticker-per-target + semaphore + skip-if-running
 │   ├── store             # thread-safe result store (name = primary key)

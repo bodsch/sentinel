@@ -265,31 +265,37 @@ http:
 ```
 ---
 
-## DNS Configuration
+## DNS Configuration (0.2)
 
-Example:
+A DNS target queries a resolver for a record and validates the response. A target
+carries exactly one protocol block, so a target is either `http` or `dns`.
 
 ```
-dns:
-  server: 1.1.1.1
-  query: example.org
-  type: A
-  expected:
-    - 93.184.216.34
+targets:
+  - name: dns-check
+    interval: 30s
+    dns:
+      server: 1.1.1.1          # host or host:port (default port 53)
+      query: example.org       # name to look up
+      type: A                  # A, AAAA, MX or TXT (default A, case-insensitive)
+      expected:                # optional; at least one answer must match
+        - 93.184.216.34
 ```
 
-Supported record types:
+Supported record types (0.2): **A, AAAA, MX, TXT**. (CNAME/SRV and DNSSEC
+validation remain future work.)
 
-- A
-- AAAA
-- MX
-- TXT
-- CNAME
-- SRV
+Behaviour:
 
-Future:
-
-- DNSSEC validation
+- The query uses UDP with EDNS0 (4096-byte buffer) and automatically retries over
+  TCP if the response is truncated, so large answer sets are handled correctly.
+- Success requires an RCODE of NOERROR. A non-NOERROR code (e.g. NXDOMAIN) fails
+  with reason `dns_error`; the code is exposed as `sentinel_dns_response_code`.
+- Without `expected`, a NOERROR response is a success even with zero answers —
+  use `sentinel_dns_answer_count == 0` to alert on "did not resolve".
+- With `expected`, at least one answer must match. Matching is type-aware: IPs
+  compare numerically (A/AAAA), MX hostnames compare case-insensitively, TXT
+  compares exactly.
 
 ---
 

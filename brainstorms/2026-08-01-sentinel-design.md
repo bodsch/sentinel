@@ -41,7 +41,17 @@ _(laufende Synthese, wird fortgeschrieben)_
 - **✅ E2E verifiziert:** Binary gegen lokale Ziele (eigener `/healthz` = success, `/does-not-exist` = http_status_error) laufen lassen; `/metrics` gescrapt: `probe_success` 1/0, `failure_info{reason}` nur beim Fehler (vanishing), `http_status_code`/`ttfb`/`last_success`/`build_info` korrekt, Label-Satz konsistent; `/readyz`→200, `/healthz`→ok; SIGTERM → graceful shutdown („sentinel stopped", exit 0).
 
 ## 🎯 Version 0.1 ist feature-complete und lauffähig.
-Alle Bausteine implementiert, getestet (`-race`), adversarial reviewed (config/http/scheduler) und end-to-end verifiziert. **Nächster Schritt laut Merkposten: Benchmark-Diskussion.**
+Alle Bausteine implementiert, getestet (`-race`), adversarial reviewed (config/http/scheduler) und end-to-end verifiziert. Benchmarks + Skalierungsprofil ergänzt (1000 Targets: ~1004 Goroutines, ~4.3 MiB Heap, ~10 ms Scrape). 0.1 committet + nach origin/main gepusht.
+
+## 0.2 — in Arbeit (Branch `feature/0.2-dns-probe`)
+- **DNS-Probe** (Entscheidung: `miekg/dns`, Record-Typen A/AAAA/MX/TXT):
+  - Config: `Target.DNS{Server,Query,Type,Expected}`, Validierung generalisiert auf „genau ein Protokoll" (http xor dns), DNS-Validierung (Server host[:port], Query, Type). Type-Default A, uppercase.
+  - `internal/probe/dns`: Query via miekg, Total-Timeout via ctx, RCODE/Answer-Count/Answers in `Diagnostics`, Reason-Mapping (timeout / dns_error bei RCODE≠NOERROR / validation_failed bei Expected-Mismatch). Ohne `expected`: NOERROR=Erfolg auch bei 0 Answers (answer_count ist Alert-Signal).
+  - `dns.Collector`: query_duration/response_code/answer_count, self-registering (metrics-Paket unverändert → Q3-Erweiterbarkeit bestätigt).
+  - main: Protokoll-Dispatch (`buildProber`). Tests via lokalem `dns.Server` (hermetisch).
+  - **E2E verifiziert:** gemischte HTTP+DNS-Config; A/MX = success, NXDOMAIN → success=0 + response_code=3 + failure_info{dns_error}; graceful shutdown.
+  - **Adversarialer Review läuft** — Findings danach eingearbeitet.
+  - Doku-Nacharbeit (DNS von „0.2 geplant" auf „implementiert") noch offen.
 
 ### Verdichteter 0.1-Scope (das „Was")
 Schmaler vertikaler HTTP-Durchstich, produktionsreif:

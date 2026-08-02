@@ -74,11 +74,17 @@ Increase diagnostic capabilities and expand beyond HTTP.
 
 ### DNS Monitoring
 
+Implemented:
+
+- A / AAAA / MX / TXT records against a configurable resolver
+- RCODE, answer-count and query-timing metrics
+- optional expected-answer validation (type-aware matching)
+- EDNS0 + automatic TCP fallback on truncation
+
 Planned:
 
-- A / AAAA / MX / TXT records
-- response validation
-- query timing
+- CNAME / SRV records
+- DNSSEC validation
 
 ---
 

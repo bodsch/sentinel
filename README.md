@@ -207,10 +207,13 @@ sentinel_http_download_duration_seconds
 - HTTP
 - HTTPS
 
+### Version 0.2
+
+- DNS (A, AAAA, MX, TXT)
+
 ### Planned (0.2+)
 
 - TCP
-- DNS
 - ICMP
 - SMTP
 - IMAP
