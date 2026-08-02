@@ -237,7 +237,7 @@ func dnsOptions(target config.Target) dnsprobe.Options {
 // httpOptions maps a resolved config target to HTTP prober options.
 func httpOptions(target config.Target) httpprobe.Options {
 	h := target.HTTP
-	return httpprobe.Options{
+	opts := httpprobe.Options{
 		Name:            target.Name,
 		Method:          h.Method,
 		URL:             h.URL,
@@ -248,7 +248,14 @@ func httpOptions(target config.Target) httpprobe.Options {
 		ExpectStatus:    h.Expect.ExpectedStatus(),
 		BodyRegex:       h.Expect.BodyRegex,
 		Headers:         h.Expect.Headers,
+		RequestHeaders:  h.Headers,
+		BearerToken:     h.BearerToken,
 	}
+	if h.BasicAuth != nil {
+		opts.BasicAuthUser = h.BasicAuth.Username
+		opts.BasicAuthPass = h.BasicAuth.Password
+	}
+	return opts
 }
 
 // parseFlags parses args into a config. The done flag is true when the process

@@ -18,7 +18,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
+	"strings"
 	"time"
 
 	"bodsch.me/sentinel/internal/probe"
@@ -58,6 +60,17 @@ type Options struct {
 	BodyRegex []string
 	// Headers are exact response-header expectations.
 	Headers map[string]string
+
+	// RequestHeaders are headers sent with the request. A "Host" key sets the
+	// request host. For security they are applied only to the target's own host,
+	// not carried across a redirect to a different host.
+	RequestHeaders map[string]string
+	// BasicAuthUser/BasicAuthPass, when the user is non-empty, add an HTTP Basic
+	// Authorization header.
+	BasicAuthUser string
+	BasicAuthPass string
+	// BearerToken, when non-empty, adds an "Authorization: Bearer <token>" header.
+	BearerToken string
 }
 
 // Prober runs HTTP checks for a single target. It satisfies probe.Prober.
@@ -70,6 +83,11 @@ type Prober struct {
 	maxRedirects    int
 	maxBodyBytes    int64
 	userAgent       string
+	requestHeaders  map[string]string
+	basicUser       string
+	basicPass       string
+	bearerToken     string
+	origin          string // canonical scheme://host:port of the target URL
 	validators      []validator.Validator
 	transport       *http.Transport
 }
@@ -99,10 +117,62 @@ func New(opts Options) (*Prober, error) {
 		maxRedirects:    opts.MaxRedirects,
 		maxBodyBytes:    opts.MaxBodyBytes,
 		userAgent:       "sentinel/" + version.Version,
+		requestHeaders:  opts.RequestHeaders,
+		basicUser:       opts.BasicAuthUser,
+		basicPass:       opts.BasicAuthPass,
+		bearerToken:     strings.TrimSpace(opts.BearerToken),
+		origin:          originKey(opts.URL),
 		validators:      validators,
 		transport:       newTransport(),
 	}
 	return p, nil
+}
+
+// originKey returns a canonical scheme://host:port key for same-origin checks:
+// scheme and host lowercased, any trailing dot on the host removed, and the port
+// defaulted from the scheme. Custom headers and credentials are forwarded across
+// a redirect only when the hop's originKey equals the target's, so they never
+// reach a different host, port, or scheme — the last of which also stops
+// credentials being resent in clear after an https->http downgrade. It matches
+// the host/port canonicalisation used by normalizeURL for redirect-loop
+// detection, keeping the two host-identity notions consistent.
+func originKey(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	scheme := strings.ToLower(u.Scheme)
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	port := u.Port()
+	if port == "" {
+		switch scheme {
+		case "https":
+			port = "443"
+		case "http":
+			port = "80"
+		}
+	}
+	return scheme + "://" + host + ":" + port
+}
+
+// applyRequestHeaders adds the configured request headers and authentication to
+// req. A "Host" header maps to req.Host (the transport ignores it in req.Header).
+// Auth sets the Authorization header; config validation guarantees at most one of
+// basic auth, bearer token, or an explicit Authorization header is configured.
+func (p *Prober) applyRequestHeaders(req *http.Request) {
+	for k, v := range p.requestHeaders {
+		if http.CanonicalHeaderKey(k) == "Host" {
+			req.Host = v
+			continue
+		}
+		req.Header.Set(k, v)
+	}
+	switch {
+	case p.basicUser != "":
+		req.SetBasicAuth(p.basicUser, p.basicPass)
+	case p.bearerToken != "":
+		req.Header.Set("Authorization", "Bearer "+p.bearerToken)
+	}
 }
 
 // buildValidators turns the resolved expectations into an ordered validator
@@ -175,6 +245,14 @@ func (p *Prober) run(ctx context.Context) (*Diagnostics, probe.Timings, probe.Fa
 			return diag, timings, probe.ReasonNetworkError
 		}
 		req.Header.Set("User-Agent", p.userAgent)
+
+		// Apply custom headers and auth only to the target's own origin
+		// (scheme+host+port): a redirect to a different origin must not receive
+		// the credentials or headers, which would leak them to a third party (or
+		// resend them in clear after an https->http downgrade).
+		if originKey(current) == p.origin {
+			p.applyRequestHeaders(req)
+		}
 
 		tr := newHopTrace()
 		req = req.WithContext(traceContext(req.Context(), tr))

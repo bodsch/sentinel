@@ -138,9 +138,16 @@ Planned:
 Planned:
 
 - HTTP/2 optimization
-- custom request headers
+- ~~custom request headers~~ **(implemented)**: `http.headers` sets request
+  headers (a `Host` key maps to the request host); sent only to the target's own
+  host, never carried across a redirect to a different host. See
+  `configuration.md`.
 - request body support
-- authentication support
+- ~~authentication~~ **(implemented)**: `http.basic_auth` and `http.bearer_token`
+  (mutually exclusive with each other and an explicit Authorization header),
+  applied same-host-only for leak safety. Secrets are inline; **planned
+  follow-up**: `password_file` / `bearer_token_file` (and/or env references) so
+  credentials need not live in the config and `--validate` can run without them.
 - JSONPath validation
 - XPath validation
 - body size validation

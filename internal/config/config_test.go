@@ -148,6 +148,41 @@ targets:
 	}
 }
 
+func TestHTTPRequestHeadersAndAuthValid(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseResolve(t, `
+targets:
+  - name: with-headers-and-basic
+    http:
+      url: https://a.example
+      headers:
+        X-Api-Key: abc
+        Host: vhost.example
+      basic_auth:
+        username: alice
+        password: s3cret
+  - name: with-bearer
+    http:
+      url: https://b.example
+      bearer_token: tok
+`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	a := cfg.Targets[0].HTTP
+	if a.Headers["X-Api-Key"] != "abc" || a.Headers["Host"] != "vhost.example" {
+		t.Errorf("request headers = %v, want X-Api-Key/Host set", a.Headers)
+	}
+	if a.BasicAuth == nil || a.BasicAuth.Username != "alice" || a.BasicAuth.Password != "s3cret" {
+		t.Errorf("basic_auth = %+v, want alice/s3cret", a.BasicAuth)
+	}
+	if b := cfg.Targets[1].HTTP; b.BearerToken != "tok" {
+		t.Errorf("bearer_token = %q, want tok", b.BearerToken)
+	}
+}
+
 func TestValidationErrors(t *testing.T) {
 	t.Parallel()
 
@@ -220,6 +255,26 @@ func TestValidationErrors(t *testing.T) {
 			name:    "no-cap opt-out in defaults",
 			yaml:    "defaults:\n  http:\n    max_body_bytes: 0\ntargets:\n  - name: x\n    http:\n      url: https://a.example\n",
 			wantSub: "only allowed per target",
+		},
+		{
+			name:    "basic_auth without username",
+			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n      basic_auth:\n        password: p\n",
+			wantSub: "basic_auth.username is required",
+		},
+		{
+			name:    "basic_auth and bearer_token both set",
+			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n      bearer_token: t\n      basic_auth:\n        username: u\n        password: p\n",
+			wantSub: "at most one of",
+		},
+		{
+			name:    "auth header and bearer_token both set",
+			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n      bearer_token: t\n      headers:\n        Authorization: Bearer other\n",
+			wantSub: "at most one of",
+		},
+		{
+			name:    "empty request header name",
+			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n      headers:\n        \"\": v\n",
+			wantSub: "empty header name",
 		},
 	}
 

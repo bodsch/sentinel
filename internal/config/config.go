@@ -110,7 +110,24 @@ type HTTPConfig struct {
 	FollowRedirects *bool  `yaml:"follow_redirects"`
 	MaxRedirects    *int   `yaml:"max_redirects"`
 	MaxBodyBytes    *int64 `yaml:"max_body_bytes"`
-	Expect          Expect `yaml:"expect"`
+	// Headers are request headers sent with the probe (distinct from
+	// Expect.Headers, which validate the response). "Host" sets the request host.
+	// For security they are sent only to the target's own host, not carried across
+	// a redirect to a different host.
+	Headers map[string]string `yaml:"headers"`
+	// BasicAuth adds an HTTP Basic Authorization header. Mutually exclusive with
+	// BearerToken and an explicit Authorization request header.
+	BasicAuth *BasicAuth `yaml:"basic_auth"`
+	// BearerToken adds an "Authorization: Bearer <token>" header.
+	BearerToken string `yaml:"bearer_token"`
+	Expect      Expect `yaml:"expect"`
+}
+
+// BasicAuth holds HTTP Basic credentials. The password may be empty; the username
+// is required when the block is present.
+type BasicAuth struct {
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
 }
 
 // Expect declares the response validations a target must satisfy. A zero Status

@@ -38,7 +38,8 @@ targets:
     http:
       url: https://example.org
 
-  # Overrides the interval and validates status, a body pattern and a header.
+  # Overrides the interval, sends request headers + Basic auth, and validates
+  # status, a body pattern and a response header.
   - name: api-health
     interval: 15s
     tags:
@@ -48,11 +49,17 @@ targets:
     http:
       url: https://api.example.org/health
       method: GET
+      headers:               # request headers (Host sets the request host)
+        X-Api-Key: "abc123"
+        Accept: application/json
+      basic_auth:            # or use bearer_token: "..." (mutually exclusive)
+        username: monitor
+        password: "s3cret"
       expect:
         status: 200
         body_regex:
           - "\"status\"\\s*:\\s*\"(ok|healthy)\""
-        headers:
+        headers:             # response-header expectations (validation)
           Content-Type: application/json
 
   # Cheap availability + TLS check using HEAD (no body downloaded).

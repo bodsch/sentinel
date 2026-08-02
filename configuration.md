@@ -255,6 +255,45 @@ Rules:
   rejected, so the opt-out can never blanket the whole fleet from one line.
 - **negative** → rejected at validation.
 
+### Request headers and authentication
+
+`http.headers` sets **request** headers (distinct from `http.expect.headers`,
+which validate the *response*). A `Host` key sets the request host (useful for
+virtual hosts). A custom `User-Agent` overrides Sentinel's default.
+
+Authentication adds an `Authorization` header via one of two shorthands:
+
+```
+targets:
+  - name: api
+    http:
+      url: https://api.example.org/health
+      headers:
+        X-Api-Key: "abc123"
+        Accept: application/json
+      basic_auth:
+        username: monitor
+        password: "s3cret"
+
+  - name: api-bearer
+    http:
+      url: https://api.example.org/status
+      bearer_token: "eyJhbGciOi..."
+```
+
+Rules:
+
+- `basic_auth` requires a `username`; the `password` may be empty.
+- **At most one** of `basic_auth`, `bearer_token`, or an explicit `Authorization`
+  entry in `headers` may be set — they all target the same header.
+- **Security:** request headers and credentials are sent **only to the target's
+  own host**. If the probe follows a redirect to a *different* host, they are
+  dropped on that hop, so credentials never leak to a third party.
+- **Secrets** are given inline here. Protect the config file's permissions
+  accordingly. Reading secrets from a file or environment variable
+  (`password_file` / `bearer_token_file`) is a planned enhancement — see
+  `Roadmap.md`.
+
 ---
 
 ## HTTP Validation
