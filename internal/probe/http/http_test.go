@@ -193,6 +193,25 @@ func TestProbeMaxBodyBytesTruncates(t *testing.T) {
 	}
 }
 
+func TestProbeMaxBodyBytesUncapped(t *testing.T) {
+	t.Parallel()
+
+	// A body far larger than the default 1 MiB cap, with an END marker last.
+	srv := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		_, _ = w.Write([]byte("START" + strings.Repeat("x", 2<<20) + "END"))
+	}))
+	defer srv.Close()
+
+	// MaxBodyBytes == 0 disables the cap: the full body is read, so a regex for
+	// the trailing END marker (beyond the default cap) must match.
+	opts := baseOpts(srv.URL)
+	opts.MaxBodyBytes = 0
+	opts.BodyRegex = []string{"END"}
+	if res := runProbe(t, opts); !res.Success {
+		t.Fatalf("expected END to be read with the cap disabled, got %q", res.FailureReason)
+	}
+}
+
 func TestRedirectFollow(t *testing.T) {
 	t.Parallel()
 

@@ -174,8 +174,11 @@ func (h *HTTPConfig) ResolvedMaxRedirects() int {
 	return *h.MaxRedirects
 }
 
-// ResolvedMaxBodyBytes reports the effective body-size cap, defaulting to
-// DefaultMaxBodyBytes when unset.
+// ResolvedMaxBodyBytes reports the effective body-size cap in bytes. When unset
+// (nil) it defaults to DefaultMaxBodyBytes. An explicit value is returned as-is,
+// including an explicit 0, which the probe interprets as "no cap" — read the
+// full body, bounded only by the per-target timeout. This distinguishes "unset"
+// (nil, → 1 MiB default) from an explicit opt-out (0).
 func (h *HTTPConfig) ResolvedMaxBodyBytes() int64 {
 	if h.MaxBodyBytes == nil {
 		return DefaultMaxBodyBytes

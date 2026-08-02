@@ -215,6 +215,46 @@ targets:
       max_body_bytes: 1048576
 ```
 
+### `max_body_bytes`
+
+Caps how many response body bytes the probe reads. It bounds memory and is a
+denial-of-service safeguard. It follows the normal merge rule, so it can be set
+in `defaults.http` and **overridden per target**:
+
+```
+defaults:
+  http:
+    max_body_bytes: 1048576   # 1 MiB default for every target
+
+targets:
+  # Large page: raise the cap so the full download time is measured.
+  - name: media-heavy
+    http:
+      url: https://example.org/large
+      max_body_bytes: 8388608   # 8 MiB
+
+  # Opt out entirely: read the full body, bounded only by the target timeout.
+  # Use only for trusted targets — this removes the DoS safeguard.
+  - name: full-transfer
+    http:
+      url: https://example.org/report
+      max_body_bytes: 0         # 0 = no cap
+```
+
+Rules:
+
+- **unset** → inherits `defaults.http.max_body_bytes`, else the built-in 1 MiB.
+- **positive** → cap in bytes; body beyond the cap is not read (so `download`
+  timing reflects only the bytes read, and a `body_regex` cannot match past it).
+- **0** → no cap; the full body is read into memory, stopped only by the
+  per-target `timeout`. The resident cost is then bounded by *timeout ×
+  bandwidth* of RAM — not by any byte limit — so a large or hostile server can
+  make the probe consume substantial memory and OOM-kill the process. It trades
+  the DoS safeguard for accuracy; use it only on trusted targets.
+  **Only valid per target** — `max_body_bytes: 0` in the `defaults` block is
+  rejected, so the opt-out can never blanket the whole fleet from one line.
+- **negative** → rejected at validation.
+
 ---
 
 ## HTTP Validation

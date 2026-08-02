@@ -79,6 +79,28 @@ targets:
       expect:
         status: 200
 
+  # Per-target max_body_bytes override: raise the cap on a large page so the
+  # full download time is measured (overrides the 1 MiB default above).
+  - name: large-report
+    tags:
+      service: reporting
+      environment: production
+    http:
+      url: https://example.org/report
+      max_body_bytes: 8388608   # 8 MiB
+
+  # Opt out of the body cap entirely (read the full body; memory then grows with
+  # timeout x bandwidth, not a byte limit). Removes the DoS safeguard, so it is
+  # only allowed per target (never in defaults) — use only for trusted targets.
+  - name: full-transfer
+    timeout: 30s
+    tags:
+      service: reporting
+      environment: production
+    http:
+      url: https://example.org/full
+      max_body_bytes: 0         # 0 = no cap
+
   # DNS target (0.2): resolve an A record via a specific resolver and check it.
   - name: dns-a-record
     interval: 30s

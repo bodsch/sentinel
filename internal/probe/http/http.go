@@ -45,7 +45,12 @@ type Options struct {
 	FollowRedirects bool
 	// MaxRedirects is the maximum number of redirects to follow.
 	MaxRedirects int
-	// MaxBodyBytes caps how many response body bytes are read.
+	// MaxBodyBytes caps how many response body bytes are read. A value of zero
+	// (or less) disables the cap: the full body is read into memory, stopped
+	// only by the probe timeout. The resident cost is therefore bounded by
+	// timeout x bandwidth, not by any byte limit, so an uncapped probe against a
+	// large or hostile server can consume substantial memory — use only for
+	// trusted targets.
 	MaxBodyBytes int64
 	// ExpectStatus is the expected status code (already defaulted, e.g. 200).
 	ExpectStatus int
@@ -230,9 +235,11 @@ func (p *Prober) run(ctx context.Context) (*Diagnostics, probe.Timings, probe.Fa
 
 		body, readErr := readCapped(resp.Body, p.maxBodyBytes)
 		downloadEnd := time.Now()
-		// Close without draining: with keep-alives disabled the connection is
-		// not reused, so reading the remaining (potentially unbounded) body
-		// would defeat the max_body_bytes cap for no benefit.
+		// Close without draining. With keep-alives disabled the connection is
+		// not reused, so when a cap applies, reading the remaining (potentially
+		// unbounded) body would only defeat the max_body_bytes cap for no
+		// benefit. When uncapped (max_body_bytes: 0) readCapped already consumed
+		// the whole body, so this close merely releases the connection.
 		_ = resp.Body.Close()
 		timings = tr.timings(downloadEnd)
 
@@ -258,7 +265,15 @@ func (p *Prober) run(ctx context.Context) (*Diagnostics, probe.Timings, probe.Fa
 }
 
 // readCapped reads at most max bytes from r. Bytes beyond the cap are left on
-// the connection, which is then closed by the caller.
+// the connection, which is then closed by the caller. A max of zero (or less)
+// means "no cap": the full body is read into memory, stopped only by the
+// probe's context deadline (the per-target timeout) — so the buffer can grow to
+// roughly timeout x bandwidth, not to any fixed limit. This opt-out is for
+// targets where the true full-body transfer time matters and the operator
+// accepts the unbounded memory cost.
 func readCapped(r io.Reader, max int64) ([]byte, error) {
+	if max <= 0 {
+		return io.ReadAll(r)
+	}
 	return io.ReadAll(io.LimitReader(r, max))
 }
