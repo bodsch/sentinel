@@ -1,0 +1,212 @@
+package http
+
+import (
+	nethttp "net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+)
+
+func TestRequestHeadersAndBasicAuth(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu      sync.Mutex
+		apiKey  string
+		host    string
+		user    string
+		pass    string
+		authOK  bool
+		userAgt string
+	)
+	srv := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		mu.Lock()
+		apiKey = r.Header.Get("X-Api-Key")
+		host = r.Host
+		user, pass, authOK = r.BasicAuth()
+		userAgt = r.Header.Get("User-Agent")
+		mu.Unlock()
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	opts := baseOpts(srv.URL)
+	opts.RequestHeaders = map[string]string{"X-Api-Key": "abc123", "Host": "vhost.example"}
+	opts.BasicAuthUser = "alice"
+	opts.BasicAuthPass = "s3cret"
+
+	if res := runProbe(t, opts); !res.Success {
+		t.Fatalf("probe failed: %s", res.FailureReason)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if apiKey != "abc123" {
+		t.Errorf("X-Api-Key = %q, want abc123", apiKey)
+	}
+	if host != "vhost.example" {
+		t.Errorf("Host = %q, want vhost.example (Host header must map to req.Host)", host)
+	}
+	if !authOK || user != "alice" || pass != "s3cret" {
+		t.Errorf("basic auth = %q/%q ok=%v, want alice/s3cret", user, pass, authOK)
+	}
+	if !strings.HasPrefix(userAgt, "sentinel/") {
+		t.Errorf("User-Agent = %q, want the sentinel default", userAgt)
+	}
+}
+
+func TestRequestBearerToken(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu   sync.Mutex
+		auth string
+	)
+	srv := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		mu.Lock()
+		auth = r.Header.Get("Authorization")
+		mu.Unlock()
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	opts := baseOpts(srv.URL)
+	opts.BearerToken = "tok-xyz"
+	if res := runProbe(t, opts); !res.Success {
+		t.Fatalf("probe failed: %s", res.FailureReason)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if auth != "Bearer tok-xyz" {
+		t.Errorf("Authorization = %q, want %q", auth, "Bearer tok-xyz")
+	}
+}
+
+// TestWhitespaceBearerDoesNotOverrideAuthHeader verifies a whitespace-only bearer
+// token is treated as unset at runtime (matching validation, which trims it), so
+// it does not overwrite an explicit Authorization header with a malformed value.
+func TestWhitespaceBearerDoesNotOverrideAuthHeader(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu   sync.Mutex
+		auth string
+	)
+	srv := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		mu.Lock()
+		auth = r.Header.Get("Authorization")
+		mu.Unlock()
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	opts := baseOpts(srv.URL)
+	opts.RequestHeaders = map[string]string{"Authorization": "Basic preset"}
+	opts.BearerToken = "   " // whitespace only: must not override the header
+	if res := runProbe(t, opts); !res.Success {
+		t.Fatalf("probe failed: %s", res.FailureReason)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if auth != "Basic preset" {
+		t.Errorf("Authorization = %q, want the preset header preserved (whitespace bearer must be unset)", auth)
+	}
+}
+
+// TestAuthNotSentAcrossOriginRedirect is the security guard: credentials and
+// custom headers must reach the target's own origin but NOT a redirect to a
+// different origin. Two httptest servers bind distinct 127.0.0.1 ports, so the
+// redirect crosses origins (different port) deterministically — no dependence on
+// hostname resolution (localhost/IPv6).
+func TestAuthNotSentAcrossOriginRedirect(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu         sync.Mutex
+		originAuth string
+		targetAuth string
+		targetKey  string
+	)
+	target := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		mu.Lock()
+		targetAuth = r.Header.Get("Authorization")
+		targetKey = r.Header.Get("X-Api-Key")
+		mu.Unlock()
+		w.WriteHeader(200)
+	}))
+	defer target.Close()
+
+	origin := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		mu.Lock()
+		originAuth = r.Header.Get("Authorization")
+		mu.Unlock()
+		nethttp.Redirect(w, r, target.URL, nethttp.StatusFound)
+	}))
+	defer origin.Close()
+
+	opts := baseOpts(origin.URL)
+	opts.RequestHeaders = map[string]string{"X-Api-Key": "secret-key"}
+	opts.BasicAuthUser = "alice"
+	opts.BasicAuthPass = "s3cret"
+	if res := runProbe(t, opts); !res.Success {
+		t.Fatalf("probe failed: %s", res.FailureReason)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if originAuth == "" {
+		t.Error("origin must receive the Authorization header")
+	}
+	if targetAuth != "" {
+		t.Errorf("cross-origin redirect target must NOT receive Authorization, got %q", targetAuth)
+	}
+	if targetKey != "" {
+		t.Errorf("cross-origin redirect target must NOT receive the custom header, got %q", targetKey)
+	}
+}
+
+// TestAuthSentOnSameOriginRedirect verifies the guard is not over-strict: a
+// redirect to a different path on the same origin still carries auth (otherwise a
+// legitimate same-host redirect would fail with 401).
+func TestAuthSentOnSameOriginRedirect(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu     sync.Mutex
+		bAuth  string
+		bCalls int
+	)
+	srv := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		switch r.URL.Path {
+		case "/a":
+			nethttp.Redirect(w, r, "/b", nethttp.StatusFound)
+		case "/b":
+			mu.Lock()
+			bAuth = r.Header.Get("Authorization")
+			bCalls++
+			mu.Unlock()
+			w.WriteHeader(200)
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	opts := baseOpts(srv.URL + "/a")
+	opts.BearerToken = "tok-abc"
+	if res := runProbe(t, opts); !res.Success {
+		t.Fatalf("probe failed: %s", res.FailureReason)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if bCalls != 1 {
+		t.Fatalf("/b hit %d times, want 1", bCalls)
+	}
+	if bAuth != "Bearer tok-abc" {
+		t.Errorf("same-origin redirect must forward auth; /b Authorization = %q", bAuth)
+	}
+}

@@ -194,6 +194,8 @@ func validateHTTP(label string, h *HTTPConfig) []error {
 		errs = append(errs, fmt.Errorf("config: %s: http.max_body_bytes must not be negative (0 means no cap)", label))
 	}
 
+	errs = append(errs, validateHTTPAuth(h, label)...)
+
 	if h.Expect.Status != 0 && (h.Expect.Status < 100 || h.Expect.Status > 599) {
 		errs = append(errs, fmt.Errorf("config: %s: http.expect.status %d is out of range (100-599)", label, h.Expect.Status))
 	}
@@ -208,6 +210,46 @@ func validateHTTP(label string, h *HTTPConfig) []error {
 		if _, err := regexp.Compile(pattern); err != nil {
 			errs = append(errs, fmt.Errorf("config: %s: http.expect.body_regex %q does not compile: %v", label, pattern, err))
 		}
+	}
+
+	return errs
+}
+
+// validateHTTPAuth validates request headers and the authentication settings:
+// non-empty header keys, a username when basic_auth is present, and mutual
+// exclusivity between basic_auth, bearer_token and an explicit Authorization
+// request header (all three would set the same header).
+func validateHTTPAuth(h *HTTPConfig, label string) []error {
+	var errs []error
+
+	hasAuthHeader := false
+	for k := range h.Headers {
+		if strings.TrimSpace(k) == "" {
+			errs = append(errs, fmt.Errorf("config: %s: http.headers has an empty header name", label))
+			continue
+		}
+		if strings.EqualFold(k, "Authorization") {
+			hasAuthHeader = true
+		}
+	}
+
+	if h.BasicAuth != nil && strings.TrimSpace(h.BasicAuth.Username) == "" {
+		errs = append(errs, fmt.Errorf("config: %s: http.basic_auth.username is required", label))
+	}
+
+	// Count the sources that would set the Authorization header.
+	sources := 0
+	if h.BasicAuth != nil {
+		sources++
+	}
+	if strings.TrimSpace(h.BearerToken) != "" {
+		sources++
+	}
+	if hasAuthHeader {
+		sources++
+	}
+	if sources > 1 {
+		errs = append(errs, fmt.Errorf("config: %s: at most one of http.basic_auth, http.bearer_token or an Authorization header may be set", label))
 	}
 
 	return errs
