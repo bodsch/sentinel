@@ -41,7 +41,7 @@ sentinel_probe_success
 
 sentinel_http_ttfb_seconds
 
-sentinel_tls_certificate_expiry_timestamp
+sentinel_tls_certificate_expiry_timestamp_seconds
 ```
 
 ---
@@ -49,9 +49,9 @@ sentinel_tls_certificate_expiry_timestamp
 ## Common Labels
 
 Labels come from a **fixed, validated set** — this exact list. Arbitrary user tags are *not* turned
-into labels in 0.1: a `tags:` key outside this set is rejected at config validation time, which
-protects against accidental cardinality explosions. Free-form tags-as-labels (with sanitizing and
-governance) are a later feature.
+into labels: a `tags:` key outside this set is rejected at config validation time, which protects
+against accidental cardinality explosions. Free-form tags-as-labels (with sanitizing and governance)
+are a later feature.
 
 | Label| Description |
 | :--- | :---- |
@@ -69,6 +69,21 @@ sentinel_probe_success{
     type="http",
     environment="production"
 }
+```
+
+---
+
+## Build Info
+
+```
+sentinel_build_info
+```
+
+Type: `Gauge`, always `1`. Build metadata rides in the labels rather than the
+value:
+
+```
+sentinel_build_info{version="0.2.0",commit="abc1234",go_version="go1.26"} 1
 ```
 
 ---
@@ -320,19 +335,11 @@ sentinel_http_download_duration_seconds
 
 ---
 
-### Response Size
+### Response Size / Transfer Rate (planned)
 
-```
-sentinel_http_response_size_bytes
-```
-
----
-
-### Transfer Rate
-
-```
-sentinel_http_transfer_rate_bytes_per_second
-```
+> Not emitted yet. `sentinel_http_response_size_bytes` and
+> `sentinel_http_transfer_rate_bytes_per_second` are planned; today only the
+> download *duration* (`sentinel_http_download_duration_seconds`) is exported.
 
 ---
 
@@ -341,32 +348,19 @@ sentinel_http_transfer_rate_bytes_per_second
 ### Redirect Count
 
 ```
-sentinel_http_redirects_total
+sentinel_http_redirects
 ```
+
+Type: `Gauge`. The number of redirects followed on the last probe.
 
 ---
 
-### Redirect Loop
+### Redirect loop / limit (failure reasons, not metrics)
 
-```
-sentinel_http_redirect_loop
-```
-
-Values:
-
-```
-1 = loop detected
-
-0 = normal
-```
-
----
-
-### Redirect Limit Exceeded
-
-```
-sentinel_http_redirect_limit_exceeded
-```
+Redirect loops and exceeding the redirect limit are **not** separate metrics.
+They surface as the `reason` label on `sentinel_probe_failure_info`
+(`reason="redirect_loop"` / `reason="redirect_limit_exceeded"`), alongside the
+other classified failure reasons.
 
 ---
 
@@ -544,8 +538,10 @@ max_over_time(sentinel_scrape_duration_seconds[1h])  # recent worst-case render 
 
 Metrics are rendered live on every scrape: each collector walks the result store
 and emits a fresh series per target. The cost is therefore **O(N)** in the number
-of targets — an HTTP target emits ~11 series (success, duration, DNS/TCP/TLS/TTFB/
-download timings, status, redirects, TLS diagnostics).
+of targets — an HTTP target emits ~10 scrape-time state series (success,
+last-success, DNS/TCP/TLS/download timings, status, redirects, TLS diagnostics).
+The latency histograms (`probe_duration`, `http_ttfb`) are separate: they are fed
+at probe time and each expands to `buckets + 2` series.
 
 Measured cost (18-core arm64; see `docs/benchmark-vs-blackbox.md`):
 
@@ -702,7 +698,7 @@ sentinel_probe_success == 0
 ### Redirect Loop
 
 ```
-sentinel_http_redirect_loop == 1
+sentinel_probe_failure_info{reason="redirect_loop"} == 1
 ```
 
 ---

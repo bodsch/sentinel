@@ -16,10 +16,11 @@ The architecture is optimized for:
 - detailed diagnostics
 - extensibility
 
-> **Version scope:** This document describes the target architecture. Version 0.1 implements the
-> HTTP/HTTPS path end-to-end with the full skeleton below, sized for **hundreds of targets**.
-> Components marked as future (hot reload, debug API, non-HTTP probes, histograms, a central
-> scheduling queue) are deferred to later versions. See `Roadmap.md`.
+> **Version scope:** This document describes the target architecture. Version 0.2 implements the
+> HTTP/HTTPS, DNS and TCP probes end-to-end on the full skeleton below, sized for **hundreds of
+> targets**, with JSONPath validation and latency histograms fed at probe time. Components still
+> deferred (hot reload, debug API, a central scheduling queue, further protocols) are marked as
+> future. See `Roadmap.md`.
 
 ---
 
@@ -296,9 +297,10 @@ BodyRegexValidator
 
 JSONPathValidator
 
-XPathValidator
+XPathValidator   (planned)
 ```
 
+Implemented validators: Status, Header, BodyRegex, JSONPath. XPath is planned.
 A target can execute multiple validators.
 
 Example:
@@ -362,7 +364,9 @@ to `client_golang`, chosen because it is the idiomatic Prometheus approach.
   are read **live at scrape time** by a custom collector that pulls from the result store. This
   keeps them always current with no in-process history and no staleness bookkeeping.
 - *Distribution metrics* (histograms) are classic `prometheus.Histogram` objects that the probe
-  feeds via `.Observe()` at run time. These arrive in 0.2; version 0.1 exposes state gauges only.
+  feeds via `.Observe()` at run time, through the scheduler's Observer hook. Since 0.2,
+  `sentinel_probe_duration_seconds` and `sentinel_http_ttfb_seconds` are histograms; the other
+  phase timings remain state gauges.
 
 Large diagnostic information is not exposed as labels.
 
