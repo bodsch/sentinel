@@ -250,6 +250,7 @@ func httpOptions(target config.Target) httpprobe.Options {
 		Headers:         h.Expect.Headers,
 		RequestHeaders:  h.Headers,
 		BearerToken:     h.BearerToken,
+		Body:            h.Body,
 	}
 	if h.BasicAuth != nil {
 		opts.BasicAuthUser = h.BasicAuth.Username

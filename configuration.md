@@ -209,7 +209,7 @@ targets:
     timeout: 10s          # target-level total timeout
     http:
       url: https://example.org
-      method: GET         # GET or HEAD in 0.1
+      method: GET         # GET, HEAD, POST, PUT, PATCH or DELETE
       follow_redirects: true
       max_redirects: 10
       max_body_bytes: 1048576
@@ -254,6 +254,34 @@ Rules:
   **Only valid per target** — `max_body_bytes: 0` in the `defaults` block is
   rejected, so the opt-out can never blanket the whole fleet from one line.
 - **negative** → rejected at validation.
+
+### Method and request body
+
+`http.method` accepts `GET`, `HEAD`, `POST`, `PUT`, `PATCH` or `DELETE`
+(case-insensitive). `http.body` sends a request body with the initial request;
+set its `Content-Type` via `headers`:
+
+```
+targets:
+  - name: ingest
+    http:
+      url: https://api.example.org/ingest
+      method: POST
+      headers:
+        Content-Type: application/json
+      body: |
+        {"probe": "sentinel", "ping": true}
+      expect:
+        status: 202
+```
+
+- `http.body` is rejected with `GET` or `HEAD` (a body there is almost always a
+  mistake).
+- If the probe follows a redirect, it is followed as a **bodyless GET** — the
+  method and body apply to the initial request only. This matches common client
+  behaviour for 301/302/303 and avoids re-sending the body (duplicate
+  side-effects, cross-origin leaks). Set `follow_redirects: false` if a target
+  needs the method preserved across a redirect.
 
 ### Request headers and authentication
 

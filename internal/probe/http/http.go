@@ -37,7 +37,7 @@ const ProbeType = "http"
 type Options struct {
 	// Name is the target name (for reference/logging).
 	Name string
-	// Method is the HTTP method ("GET" or "HEAD" in 0.1).
+	// Method is the HTTP method (GET, HEAD, POST, PUT, PATCH or DELETE).
 	Method string
 	// URL is the target URL.
 	URL string
@@ -71,6 +71,9 @@ type Options struct {
 	BasicAuthPass string
 	// BearerToken, when non-empty, adds an "Authorization: Bearer <token>" header.
 	BearerToken string
+	// Body is the request body sent with the initial request. Redirects are
+	// followed as GET with no body.
+	Body string
 }
 
 // Prober runs HTTP checks for a single target. It satisfies probe.Prober.
@@ -87,6 +90,7 @@ type Prober struct {
 	basicUser       string
 	basicPass       string
 	bearerToken     string
+	body            string
 	origin          string // canonical scheme://host:port of the target URL
 	validators      []validator.Validator
 	transport       *http.Transport
@@ -121,6 +125,7 @@ func New(opts Options) (*Prober, error) {
 		basicUser:       opts.BasicAuthUser,
 		basicPass:       opts.BasicAuthPass,
 		bearerToken:     strings.TrimSpace(opts.BearerToken),
+		body:            opts.Body,
 		origin:          originKey(opts.URL),
 		validators:      validators,
 		transport:       newTransport(),
@@ -159,10 +164,16 @@ func originKey(raw string) string {
 // req. A "Host" header maps to req.Host (the transport ignores it in req.Header).
 // Auth sets the Authorization header; config validation guarantees at most one of
 // basic auth, bearer token, or an explicit Authorization header is configured.
-func (p *Prober) applyRequestHeaders(req *http.Request) {
+func (p *Prober) applyRequestHeaders(req *http.Request, hasBody bool) {
 	for k, v := range p.requestHeaders {
 		if http.CanonicalHeaderKey(k) == "Host" {
 			req.Host = v
+			continue
+		}
+		// Content-Type describes a body; skip it on a bodyless request (e.g. a
+		// redirect followed as GET) so the request does not declare a type for a
+		// body it no longer carries.
+		if !hasBody && http.CanonicalHeaderKey(k) == "Content-Type" {
 			continue
 		}
 		req.Header.Set(k, v)
@@ -238,8 +249,17 @@ func (p *Prober) run(ctx context.Context) (*Diagnostics, probe.Timings, probe.Fa
 	current := p.url
 	visited := map[string]struct{}{normalizeURL(current): {}}
 
+	// method and body apply to the initial request; a redirect resets them to a
+	// bodyless GET (see the redirect branch below).
+	method := p.method
+	bodyStr := p.body
+
 	for {
-		req, err := http.NewRequestWithContext(ctx, p.method, current, nil)
+		var reqBody io.Reader
+		if bodyStr != "" {
+			reqBody = strings.NewReader(bodyStr)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, current, reqBody)
 		if err != nil {
 			// The URL was validated at config load, so this is unexpected.
 			return diag, timings, probe.ReasonNetworkError
@@ -251,7 +271,7 @@ func (p *Prober) run(ctx context.Context) (*Diagnostics, probe.Timings, probe.Fa
 		// the credentials or headers, which would leak them to a third party (or
 		// resend them in clear after an https->http downgrade).
 		if originKey(current) == p.origin {
-			p.applyRequestHeaders(req)
+			p.applyRequestHeaders(req, bodyStr != "")
 		}
 
 		tr := newHopTrace()
@@ -304,6 +324,17 @@ func (p *Prober) run(ctx context.Context) (*Diagnostics, probe.Timings, probe.Fa
 			diag.Redirects = append(diag.Redirects, RedirectStep{URL: current, StatusCode: resp.StatusCode})
 			visited[normalizeURL(next)] = struct{}{}
 			current = next
+			// Drop the request body on any redirect — it is never re-sent, which
+			// avoids duplicate side-effects and (with the origin guard above)
+			// cross-origin leaks. Preserve GET and HEAD; downgrade body-carrying
+			// or side-effecting methods (POST/PUT/PATCH/DELETE) to GET so the
+			// redirect target is only read, not mutated. This matches common
+			// client behaviour for 301/302/303; a target that needs the method
+			// preserved across a redirect should set follow_redirects: false.
+			bodyStr = ""
+			if method != http.MethodGet && method != http.MethodHead {
+				method = http.MethodGet
+			}
 			continue
 		}
 

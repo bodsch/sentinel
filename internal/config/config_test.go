@@ -183,6 +183,34 @@ targets:
 	}
 }
 
+func TestHTTPMethodAndBodyValid(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseResolve(t, `
+targets:
+  - name: post
+    http:
+      url: https://a.example
+      method: post
+      body: '{"k":"v"}'
+      headers:
+        Content-Type: application/json
+  - name: delete
+    http:
+      url: https://b.example
+      method: DELETE
+`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if p := cfg.Targets[0].HTTP; p.Method != "POST" || p.Body != `{"k":"v"}` {
+		t.Errorf("post target: method=%q body=%q, want POST + json body", p.Method, p.Body)
+	}
+	if d := cfg.Targets[1].HTTP; d.Method != "DELETE" {
+		t.Errorf("delete target: method=%q, want DELETE", d.Method)
+	}
+}
+
 func TestValidationErrors(t *testing.T) {
 	t.Parallel()
 
@@ -223,8 +251,8 @@ func TestValidationErrors(t *testing.T) {
 		},
 		{
 			name:    "bad method",
-			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n      method: POST\n",
-			wantSub: "http.method must be GET or HEAD",
+			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n      method: TRACE\n",
+			wantSub: "http.method must be one of",
 		},
 		{
 			name:    "status out of range",
@@ -275,6 +303,11 @@ func TestValidationErrors(t *testing.T) {
 			name:    "empty request header name",
 			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n      headers:\n        \"\": v\n",
 			wantSub: "empty header name",
+		},
+		{
+			name:    "body with GET",
+			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n      method: GET\n      body: hi\n",
+			wantSub: "http.body is not allowed with method GET",
 		},
 	}
 
@@ -327,7 +360,7 @@ targets:
       team: platform
     http:
       url: https://a.example
-      method: POST
+      method: TRACE
 `)
 	if err == nil {
 		t.Fatal("expected errors, got nil")

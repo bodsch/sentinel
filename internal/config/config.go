@@ -120,7 +120,11 @@ type HTTPConfig struct {
 	BasicAuth *BasicAuth `yaml:"basic_auth"`
 	// BearerToken adds an "Authorization: Bearer <token>" header.
 	BearerToken string `yaml:"bearer_token"`
-	Expect      Expect `yaml:"expect"`
+	// Body is the request body sent with the initial request (typically with
+	// POST/PUT/PATCH). Set its Content-Type via Headers. Redirects are followed
+	// as GET without a body.
+	Body   string `yaml:"body"`
+	Expect Expect `yaml:"expect"`
 }
 
 // BasicAuth holds HTTP Basic credentials. The password may be empty; the username

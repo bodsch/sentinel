@@ -181,10 +181,14 @@ func validateHTTP(label string, h *HTTPConfig) []error {
 	}
 
 	switch h.Method {
-	case "GET", "HEAD":
-		// ok (0.1 supports GET and HEAD)
+	case "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE":
+		// ok
 	default:
-		errs = append(errs, fmt.Errorf("config: %s: http.method must be GET or HEAD in 0.1, got %q", label, h.Method))
+		errs = append(errs, fmt.Errorf("config: %s: http.method must be one of GET, HEAD, POST, PUT, PATCH, DELETE, got %q", label, h.Method))
+	}
+
+	if h.Body != "" && (h.Method == "GET" || h.Method == "HEAD") {
+		errs = append(errs, fmt.Errorf("config: %s: http.body is not allowed with method %s", label, h.Method))
 	}
 
 	if h.ResolvedMaxRedirects() < 0 {

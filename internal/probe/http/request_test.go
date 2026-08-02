@@ -1,12 +1,151 @@
 package http
 
 import (
+	"io"
 	nethttp "net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
 )
+
+func TestPostBodySent(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu     sync.Mutex
+		method string
+		body   string
+		ctype  string
+	)
+	srv := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		method = r.Method
+		body = string(b)
+		ctype = r.Header.Get("Content-Type")
+		mu.Unlock()
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	opts := baseOpts(srv.URL)
+	opts.Method = "POST"
+	opts.Body = `{"ping":true}`
+	opts.RequestHeaders = map[string]string{"Content-Type": "application/json"}
+	if res := runProbe(t, opts); !res.Success {
+		t.Fatalf("probe failed: %s", res.FailureReason)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if method != "POST" {
+		t.Errorf("method = %q, want POST", method)
+	}
+	if body != `{"ping":true}` {
+		t.Errorf("body = %q, want the configured payload", body)
+	}
+	if ctype != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", ctype)
+	}
+}
+
+// TestRedirectFollowedAsBodylessGet verifies a POST with a body that hits a
+// redirect is followed as a GET with no body (avoids re-sending the body).
+func TestRedirectFollowedAsBodylessGet(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu      sync.Mutex
+		bMethod string
+		bBody   string
+		bCtype  string
+		bCalls  int
+	)
+	srv := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		switch r.URL.Path {
+		case "/a":
+			nethttp.Redirect(w, r, "/b", nethttp.StatusFound)
+		case "/b":
+			b, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			bMethod = r.Method
+			bBody = string(b)
+			bCtype = r.Header.Get("Content-Type")
+			bCalls++
+			mu.Unlock()
+			w.WriteHeader(200)
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	opts := baseOpts(srv.URL + "/a")
+	opts.Method = "POST"
+	opts.Body = "payload"
+	opts.RequestHeaders = map[string]string{"Content-Type": "application/json"}
+	if res := runProbe(t, opts); !res.Success {
+		t.Fatalf("probe failed: %s", res.FailureReason)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if bCalls != 1 {
+		t.Fatalf("/b hit %d times, want 1", bCalls)
+	}
+	if bMethod != "GET" {
+		t.Errorf("redirect hop method = %q, want GET", bMethod)
+	}
+	if bBody != "" {
+		t.Errorf("redirect hop body = %q, want empty (body not re-sent)", bBody)
+	}
+	if bCtype != "" {
+		t.Errorf("redirect hop Content-Type = %q, want empty (no body, so no content type)", bCtype)
+	}
+}
+
+// TestHeadRedirectStaysHead verifies the redirect reset preserves HEAD: a HEAD
+// probe that follows a redirect must not silently downgrade to GET.
+func TestHeadRedirectStaysHead(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu      sync.Mutex
+		bMethod string
+		bCalls  int
+	)
+	srv := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		switch r.URL.Path {
+		case "/a":
+			nethttp.Redirect(w, r, "/b", nethttp.StatusFound)
+		case "/b":
+			mu.Lock()
+			bMethod = r.Method
+			bCalls++
+			mu.Unlock()
+			w.WriteHeader(200)
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	opts := baseOpts(srv.URL + "/a")
+	opts.Method = "HEAD"
+	if res := runProbe(t, opts); !res.Success {
+		t.Fatalf("probe failed: %s", res.FailureReason)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if bCalls != 1 {
+		t.Fatalf("/b hit %d times, want 1", bCalls)
+	}
+	if bMethod != "HEAD" {
+		t.Errorf("redirect hop method = %q, want HEAD (must not downgrade to GET)", bMethod)
+	}
+}
 
 func TestRequestHeadersAndBasicAuth(t *testing.T) {
 	t.Parallel()

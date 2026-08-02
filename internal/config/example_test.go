@@ -27,7 +27,10 @@ func TestExampleConfigIsValid(t *testing.T) {
 		case tg.HTTP != nil && tg.DNS != nil:
 			t.Errorf("target %q has both HTTP and DNS blocks", tg.Name)
 		case tg.HTTP != nil:
-			if tg.HTTP.Method != "GET" && tg.HTTP.Method != "HEAD" {
+			switch tg.HTTP.Method {
+			case "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE":
+				// ok
+			default:
 				t.Errorf("target %q resolved to unexpected method %q", tg.Name, tg.HTTP.Method)
 			}
 		case tg.DNS != nil:

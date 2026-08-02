@@ -16,7 +16,7 @@ defaults:
   interval: 30s          # how often each target is probed
   timeout: 10s           # total per-run timeout (covers all redirect hops)
   http:
-    method: GET          # GET or HEAD (0.1)
+    method: GET          # GET, HEAD, POST, PUT, PATCH or DELETE
     follow_redirects: true
     max_redirects: 10
     max_body_bytes: 1048576   # 1 MiB cap on the body read (DoS safeguard)
@@ -61,6 +61,23 @@ targets:
           - "\"status\"\\s*:\\s*\"(ok|healthy)\""
         headers:             # response-header expectations (validation)
           Content-Type: application/json
+
+  # POST with a JSON request body (Content-Type via headers). Redirects, if any,
+  # are followed as a bodyless GET.
+  - name: ingest
+    interval: 30s
+    tags:
+      service: backend
+      environment: production
+    http:
+      url: https://api.example.org/ingest
+      method: POST
+      headers:
+        Content-Type: application/json
+      body: |
+        {"probe": "sentinel", "ping": true}
+      expect:
+        status: 202
 
   # Cheap availability + TLS check using HEAD (no body downloaded).
   - name: docs-availability
