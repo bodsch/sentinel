@@ -19,16 +19,16 @@ type resultSource interface {
 type Collector struct {
 	results resultSource
 
-	statusCode   *prometheus.Desc
-	dnsDuration  *prometheus.Desc
-	tcpDuration  *prometheus.Desc
-	tlsDuration  *prometheus.Desc
-	ttfb         *prometheus.Desc
-	download     *prometheus.Desc
-	redirects    *prometheus.Desc
-	certExpiry   *prometheus.Desc
-	certRemain   *prometheus.Desc
-	certValid    *prometheus.Desc
+	statusCode  *prometheus.Desc
+	dnsDuration *prometheus.Desc
+	tcpDuration *prometheus.Desc
+	tlsDuration *prometheus.Desc
+	ttfb        *prometheus.Desc
+	download    *prometheus.Desc
+	redirects   *prometheus.Desc
+	certExpiry  *prometheus.Desc
+	certRemain  *prometheus.Desc
+	certValid   *prometheus.Desc
 }
 
 // NewCollector builds the HTTP metrics collector over the given result source.

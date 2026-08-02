@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go version *)",
+      "Bash(go env *)",
+      "Bash(timeout 20 curl -sI https://proxy.golang.org)",
+      "Bash(go mod *)",
+      "Bash(go vet *)",
+      "Bash(go get *)",
+      "Bash(gofmt -w internal/)",
+      "Bash(cd \"$\\(go env GOMODCACHE\\)/github.com/xuri/excelize/v2@v2.10.1\")",
+      "Bash(go build *)",
+      "Bash(gofmt -w .)"
+    ]
+  }
+}

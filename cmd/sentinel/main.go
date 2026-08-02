@@ -1,18 +1,25 @@
-// Command sentinel is the Sentinel synthetic monitoring daemon.
-//
-// This is the 0.1 scaffold: flag parsing, logging setup and --version are wired.
-// The probe runtime (config loading, scheduler, store, metrics/server) is added
-// in subsequent steps; until then the run and --validate paths report that they
-// are not yet implemented rather than pretending to work.
+// Command sentinel is the Sentinel synthetic monitoring daemon: it continuously
+// probes the configured HTTP targets and exposes their state to Prometheus.
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
+	"bodsch.me/sentinel/internal/clock"
 	"bodsch.me/sentinel/internal/config"
 	"bodsch.me/sentinel/internal/logging"
+	"bodsch.me/sentinel/internal/metrics"
+	httpprobe "bodsch.me/sentinel/internal/probe/http"
+	"bodsch.me/sentinel/internal/scheduler"
+	"bodsch.me/sentinel/internal/server"
+	"bodsch.me/sentinel/internal/store"
 	"bodsch.me/sentinel/pkg/version"
 )
 
@@ -22,6 +29,10 @@ const (
 	exitUsage = 2
 	exitError = 1
 )
+
+// shutdownTimeout bounds the graceful drain of in-flight probes and the metrics
+// server on shutdown.
+const shutdownTimeout = 10 * time.Second
 
 // options holds the parsed command-line options.
 type options struct {
@@ -95,11 +106,100 @@ func run(args []string, stdout, stderr *os.File) int {
 		"listen", cfg.listen,
 	)
 
-	// TODO(0.1): wire the scheduler, store and the metrics/health server around
-	// the loaded configuration. Until then, fail loudly instead of silently
-	// doing nothing.
-	fmt.Fprintln(stderr, "sentinel: probe runtime is not implemented yet")
-	return exitError
+	return serve(cfg, loaded, logger)
+}
+
+// serve wires the runtime — store, scheduler, collectors, metrics server — runs
+// it, and blocks until a termination signal triggers a graceful shutdown.
+func serve(cfg options, loaded *config.Config, logger *slog.Logger) int {
+	st := store.New()
+	reg := metrics.NewRegistry()
+
+	sched := scheduler.New(scheduler.Options{
+		Clock:  clock.Real{},
+		Store:  st,
+		Logger: logger,
+	})
+
+	for i := range loaded.Targets {
+		target := loaded.Targets[i]
+		prober, err := httpprobe.New(httpOptions(target))
+		if err != nil {
+			logger.Error("building probe", slog.String("target", target.Name), slog.Any("error", err))
+			return exitError
+		}
+		spec := scheduler.JobSpec{
+			Name:     target.Name,
+			Type:     httpprobe.ProbeType,
+			Interval: target.ResolvedInterval(),
+			Labels:   target.Tags,
+			Prober:   prober,
+		}
+		if err := sched.Add(spec); err != nil {
+			logger.Error("registering target", slog.String("target", target.Name), slog.Any("error", err))
+			return exitError
+		}
+	}
+
+	// Register collectors: the generic probe collector plus the HTTP-specific one.
+	reg.MustRegister(metrics.NewProbeCollector(st, sched))
+	reg.MustRegister(httpprobe.NewCollector(st))
+
+	srv := server.New(server.Options{Addr: cfg.listen, Registry: reg, Logger: logger})
+	if err := srv.Start(); err != nil {
+		logger.Error("starting metrics server", slog.Any("error", err))
+		return exitError
+	}
+
+	// Cancel the root context on SIGINT/SIGTERM. The scheduler watches this
+	// context; cancellation stops new probes and drains in-flight ones.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	schedulerDone := make(chan struct{})
+	go func() {
+		sched.Run(ctx)
+		close(schedulerDone)
+	}()
+
+	srv.SetReady(true)
+	logger.Info("sentinel ready", slog.Int("targets", len(loaded.Targets)), slog.String("listen", cfg.listen))
+
+	<-ctx.Done()
+	logger.Info("shutting down")
+
+	// Bound the scheduler drain by shutdownTimeout.
+	select {
+	case <-schedulerDone:
+	case <-time.After(shutdownTimeout):
+		logger.Warn("scheduler drain timed out", slog.Duration("timeout", shutdownTimeout))
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		logger.Error("metrics server shutdown", slog.Any("error", err))
+	}
+
+	logger.Info("sentinel stopped")
+	return exitOK
+}
+
+// httpOptions maps a resolved config target to HTTP prober options.
+func httpOptions(target config.Target) httpprobe.Options {
+	h := target.HTTP
+	return httpprobe.Options{
+		Name:            target.Name,
+		Method:          h.Method,
+		URL:             h.URL,
+		Timeout:         target.ResolvedTimeout(),
+		FollowRedirects: h.ResolvedFollowRedirects(),
+		MaxRedirects:    h.ResolvedMaxRedirects(),
+		MaxBodyBytes:    h.ResolvedMaxBodyBytes(),
+		ExpectStatus:    h.Expect.ExpectedStatus(),
+		BodyRegex:       h.Expect.BodyRegex,
+		Headers:         h.Expect.Headers,
+	}
 }
 
 // parseFlags parses args into a config. The done flag is true when the process

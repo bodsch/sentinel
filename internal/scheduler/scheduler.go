@@ -206,29 +206,41 @@ func (s *Scheduler) execute(ctx context.Context, j *job) {
 		return
 	}
 
+	// Determine whether the success state changed since the last run. Only one
+	// probe per target runs at a time (skip-if-running), so this get-then-set is
+	// race-free per target.
+	prev, existed := s.store.Get(j.spec.Name)
+	changed := !existed || prev.Result.Success != result.Success
+
 	s.store.Set(store.Record{
 		Target: j.spec.Name,
 		Type:   j.spec.Type,
 		Labels: j.spec.Labels,
 		Result: result,
 	})
-	s.logResult(j, result)
+	s.logResult(j, result, changed)
 }
 
-// logResult logs at debug for a success and at info for a failure — the current
-// state lives in the metrics, so the log is for diagnosis.
-func (s *Scheduler) logResult(j *job, result probe.Result) {
+// logResult logs state transitions at info and steady state at debug. A target
+// that stays down therefore logs once (on the transition), not on every run —
+// the current state lives in the metrics; the log is for diagnosing changes.
+func (s *Scheduler) logResult(j *job, result probe.Result, changed bool) {
 	logger := s.logger.With(
 		slog.String("target", j.spec.Name),
 		slog.String("probe_type", j.spec.Type),
 		slog.Bool("success", result.Success),
 		slog.Int64("duration_ms", result.Duration.Milliseconds()),
 	)
-	if result.Success {
+	switch {
+	case changed && result.Success:
+		logger.Info("probe recovered")
+	case changed && !result.Success:
+		logger.Info("probe failing", slog.String("failure_reason", result.FailureReason.String()))
+	case result.Success:
 		logger.Debug("probe succeeded")
-		return
+	default:
+		logger.Debug("probe still failing", slog.String("failure_reason", result.FailureReason.String()))
 	}
-	logger.Info("probe failed", slog.String("failure_reason", result.FailureReason.String()))
 }
 
 // JobStat is a per-target counter snapshot for the metrics layer.

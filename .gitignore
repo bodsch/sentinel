@@ -1,0 +1,9 @@
+# Build artifacts
+bin/
+dist/
+
+# Test / coverage output
+coverage.out
+
+# Local, machine-specific Claude Code settings
+.claude/settings.local.json
