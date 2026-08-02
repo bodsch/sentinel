@@ -23,8 +23,9 @@ import (
 type Options struct {
 	// Addr is the listen address, e.g. ":8080".
 	Addr string
-	// Registry is the Prometheus registry served at /metrics.
-	Registry *prometheus.Registry
+	// Gatherer supplies the metrics served at /metrics. A bare *prometheus.Registry
+	// works; wrap it with metrics.NewTimingGatherer to also record render cost.
+	Gatherer prometheus.Gatherer
 	// Logger is used for serve errors. If nil, a discard logger is used.
 	Logger *slog.Logger
 }
@@ -46,7 +47,7 @@ func New(opts Options) *Server {
 	s := &Server{addr: opts.Addr, logger: logger}
 
 	mux := http.NewServeMux()
-	mux.Handle("/metrics", promhttp.HandlerFor(opts.Registry, promhttp.HandlerOpts{}))
+	mux.Handle("/metrics", promhttp.HandlerFor(opts.Gatherer, promhttp.HandlerOpts{}))
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/readyz", s.handleReadyz)
 

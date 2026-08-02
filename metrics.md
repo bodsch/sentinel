@@ -499,13 +499,78 @@ process_virtual_memory_bytes    # Linux only
 > target). On macOS the process collector still exposes CPU, file-descriptor,
 > and start-time series but omits the resident/virtual memory gauges.
 
+Sentinel also exposes the cost of serving its own metrics endpoint:
+
+```
+sentinel_scrape_duration_seconds
+```
+
+The time to **gather** all series on the last scrape — the O(N) render cost of
+building the metric families. It deliberately excludes the HTTP encoding and the
+network write to the scraper, so a slow scraper does not inflate it (the full
+round-trip is already Prometheus' own `scrape_duration_seconds`). It is set after
+a gather completes, so the value reflects the previous scrape and appears one
+scrape later; with overlapping scrapes it is the most recent scrape's value
+(a plain gauge is last-writer-wins). Use it to size Prometheus' `scrape_timeout`
+(see *Operating at scale* below).
+
 Typical operational queries:
 
 ```
 rate(process_cpu_seconds_total[5m])   # Sentinel's own CPU usage
 go_goroutines                         # goroutine growth / leaks
 process_resident_memory_bytes         # RSS trend as target count grows
+max_over_time(sentinel_scrape_duration_seconds[1h])  # recent worst-case render time
 ```
+
+---
+
+## Operating at scale
+
+Metrics are rendered live on every scrape: each collector walks the result store
+and emits a fresh series per target. The cost is therefore **O(N)** in the number
+of targets — an HTTP target emits ~11 series (success, duration, DNS/TCP/TLS/TTFB/
+download timings, status, redirects, TLS diagnostics).
+
+Measured cost (18-core arm64; see `docs/benchmark-vs-blackbox.md`):
+
+| Targets | Gather (render) — `sentinel_scrape_duration_seconds` | Full `/metrics` serve — Prometheus `scrape_duration_seconds` |
+|---|---|---|
+| 1 000  | ~9 ms   | ~20 ms  |
+| 10 000 | ~120 ms | ~260 ms |
+
+So the render itself is roughly **~12 µs per HTTP target**, and the full serve
+(render + encode + network) about twice that. Most of the cost is the Prometheus
+client library constructing and encoding the series (not Sentinel logic), so it
+is inherent to producing N series rather than something a code change removes.
+
+### Sizing `scrape_timeout`
+
+- Watch `sentinel_scrape_duration_seconds` (the render cost) and set Prometheus'
+  `scrape_timeout` comfortably above it — a factor of 2–3 leaves headroom for the
+  encoding and network transfer the metric excludes, plus load spikes:
+
+  ```yaml
+  scrape_configs:
+    - job_name: sentinel
+      scrape_interval: 30s
+      scrape_timeout: 10s      # must exceed sentinel_scrape_duration_seconds
+      static_configs:
+        - targets: ["sentinel:8080"]
+  ```
+
+- Keep `scrape_timeout` < `scrape_interval` (Prometheus requires this).
+- Alert when the render cost approaches the timeout, e.g.
+  `sentinel_scrape_duration_seconds > 0.5 * scrape_timeout`.
+
+### When one instance is not enough
+
+Render cost and resident memory both grow with N. Past roughly a few thousand
+targets, **shard**: run several Sentinel instances, each with a disjoint slice of
+the targets, and scrape each separately. Every instance then renders only its own
+share, keeping each scrape within budget. (Sentinel deliberately keeps only
+current state, so sharding needs no coordination — Prometheus remains the single
+source of truth.)
 
 ---
 

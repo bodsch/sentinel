@@ -116,12 +116,16 @@ Planned:
 - histogram support (latency distributions, fed at probe time)
 - in-probe retry with retry metrics
 - configuration templates and hot reload
-- scrape performance at high target counts: `/metrics` rendering is O(N)
-  (~259 ms at N=10000 — see `docs/benchmark-vs-blackbox.md`, Dimension B), which
-  can exceed Prometheus' `scrape_timeout`. Document the recommended
-  `scrape_timeout`/`scrape_interval` relative to target count, and investigate
-  reducing render cost (cheaper encoding, cached snapshots, or optional
-  sharding) so large deployments stay within a default scrape budget.
+- ~~scrape performance at high target counts~~ **(addressed)**. `/metrics`
+  rendering is O(N) (~259 ms at N=10000 — see `docs/benchmark-vs-blackbox.md`,
+  Dimension B). Investigation showed the cost is ~95 % Prometheus client-library
+  series construction/encoding (not Sentinel logic), so there is no large
+  in-code render win — the scaling lever is operational. Delivered:
+  the `sentinel_scrape_duration_seconds` self-metric (observe the per-scrape
+  render cost) and a `metrics.md` → *Operating at scale* section with
+  `scrape_timeout` sizing guidance and sharding advice. Cached-snapshot rendering
+  is intentionally not pursued (it would break the live-at-scrape-time model);
+  sharding remains the path past a few thousand targets per instance.
 
 ---
 

@@ -151,7 +151,15 @@ func serve(cfg options, loaded *config.Config, logger *slog.Logger) int {
 	// Expose the process's own runtime health (goroutines, heap, GC, CPU, FDs).
 	metrics.RegisterRuntimeCollectors(reg)
 
-	srv := server.New(server.Options{Addr: cfg.listen, Registry: reg, Logger: logger})
+	// Serve through a timing gatherer so the per-scrape render cost is recorded
+	// (sentinel_scrape_duration_seconds) and scrape_timeout can be sized to it.
+	gatherer := metrics.NewTimingGatherer(reg)
+
+	srv := server.New(server.Options{
+		Addr:     cfg.listen,
+		Gatherer: gatherer,
+		Logger:   logger,
+	})
 	if err := srv.Start(); err != nil {
 		logger.Error("starting metrics server", slog.Any("error", err))
 		return exitError

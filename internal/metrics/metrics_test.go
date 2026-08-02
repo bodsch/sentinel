@@ -61,6 +61,49 @@ func TestRegisterRuntimeCollectorsIsOneShot(t *testing.T) {
 	RegisterRuntimeCollectors(reg)
 }
 
+// TestTimingGathererRecordsRenderCost verifies the timing gatherer registers
+// sentinel_scrape_duration_seconds via the production constructor, reports 0 on
+// the first gather (one scrape behind), and records a positive render time on the
+// next. 1000 targets make a gather take well above clock resolution, so the
+// > 0 check is deterministic.
+func TestTimingGathererRecordsRenderCost(t *testing.T) {
+	reg := NewRegistry()
+	reg.MustRegister(NewProbeCollector(benchResults(1000), benchSkips(1000)))
+	g := NewTimingGatherer(reg)
+
+	const name = "sentinel_scrape_duration_seconds"
+
+	first, err := g.Gather()
+	if err != nil {
+		t.Fatalf("first gather: %v", err)
+	}
+	if v, ok := gaugeValue(first, name); !ok {
+		t.Fatalf("%s absent on first gather", name)
+	} else if v != 0 {
+		t.Errorf("first gather %s = %v, want exactly 0 (one scrape behind)", name, v)
+	}
+
+	second, err := g.Gather()
+	if err != nil {
+		t.Fatalf("second gather: %v", err)
+	}
+	if v, ok := gaugeValue(second, name); !ok {
+		t.Fatalf("%s absent on second gather", name)
+	} else if v <= 0 {
+		t.Errorf("second gather %s = %v, want > 0 (previous gather's render time)", name, v)
+	}
+}
+
+// gaugeValue extracts a single gauge value by metric-family name.
+func gaugeValue(families []*dto.MetricFamily, name string) (float64, bool) {
+	for _, f := range families {
+		if f.GetName() == name && len(f.GetMetric()) > 0 {
+			return f.GetMetric()[0].GetGauge().GetValue(), true
+		}
+	}
+	return 0, false
+}
+
 // gatheredNames reduces a gathered metric family slice to a name set.
 func gatheredNames(families []*dto.MetricFamily) map[string]bool {
 	names := make(map[string]bool, len(families))
