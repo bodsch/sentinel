@@ -116,6 +116,12 @@ Planned:
 - histogram support (latency distributions, fed at probe time)
 - in-probe retry with retry metrics
 - configuration templates and hot reload
+- scrape performance at high target counts: `/metrics` rendering is O(N)
+  (~259 ms at N=10000 — see `docs/benchmark-vs-blackbox.md`, Dimension B), which
+  can exceed Prometheus' `scrape_timeout`. Document the recommended
+  `scrape_timeout`/`scrape_interval` relative to target count, and investigate
+  reducing render cost (cheaper encoding, cached snapshots, or optional
+  sharding) so large deployments stay within a default scrape budget.
 
 ---
 
