@@ -563,14 +563,35 @@ is inherent to producing N series rather than something a code change removes.
 - Alert when the render cost approaches the timeout, e.g.
   `sentinel_scrape_duration_seconds > 0.5 * scrape_timeout`.
 
+### Cheapest lever: scrape less often
+
+Sentinel probes on its own tickers, **decoupled from the scrape** — so the scrape
+frequency and the probe frequency are independent. The O(N) render cost is paid
+once per *scrape*, not per probe, so simply **raising `scrape_interval`** (e.g.
+30 s → 60 s) pays that cost less often *without* losing probe freshness: targets
+still run at their configured `interval` (e.g. every 5 s), and the store always
+holds their latest result.
+
+This is a property the blackbox_exporter's pull model cannot offer — there a
+longer scrape interval directly means less frequent probing. Reach for this
+before adding instances: it is a one-line Prometheus change with no new moving
+parts. The only trade-off is metric resolution in Prometheus (you sample the
+current state less often), not probe coverage.
+
 ### When one instance is not enough
 
-Render cost and resident memory both grow with N. Past roughly a few thousand
-targets, **shard**: run several Sentinel instances, each with a disjoint slice of
-the targets, and scrape each separately. Every instance then renders only its own
-share, keeping each scrape within budget. (Sentinel deliberately keeps only
-current state, so sharding needs no coordination — Prometheus remains the single
-source of truth.)
+If probe CPU/RAM on a single machine — not the scrape cost — is the limit, or you
+want fault isolation or multiple vantage points, **shard**: run several Sentinel
+instances, each with a disjoint slice of the targets, and scrape each separately.
+Every instance then probes and renders only its own share.
+
+Sentinel deliberately keeps only current state, so sharding needs **no
+coordination** (no leader election, no shared state) — Prometheus remains the
+single source of truth. A stateless hash split (each instance keeps the targets
+whose name hashes to its shard index) is planned; see `Roadmap.md`. Until then,
+partition by hand with one config file per instance — but ensure the slices are
+**disjoint and complete**: overlap double-probes a target (extra load, duplicate
+series), a gap leaves it unmonitored.
 
 ---
 

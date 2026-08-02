@@ -250,6 +250,32 @@ Configuration
 
 ---
 
+### Scaling
+
+Planned:
+
+- stateless hash-based sharding via `--shard-index` / `--shard-count` flags.
+  Every instance loads the *same* config but keeps only the targets whose name
+  hashes to its shard, so N targets spread across M instances with each carrying
+  ~N/M. Because Sentinel holds only current state, this needs **no coordination**
+  (no leader election, no shared state) — Prometheus scrapes each shard and
+  remains the single source of truth. This lowers per-instance render cost, RSS
+  and probe CPU, and adds fault isolation (one instance failing loses only its
+  shard). See `metrics.md` → *Operating at scale*.
+
+  Trade-offs to weigh before building: changing `--shard-count` reshuffles most
+  targets under plain hashing (brief probe gaps / series churn — consistent
+  hashing would mitigate but adds complexity); overlapping or incomplete shard
+  sets double-probe or silently drop targets; and each instance carries a fixed
+  Go-runtime baseline, so sharding only pays off past a few thousand targets.
+  Note that raising `scrape_interval` (probe cadence is decoupled from scrape)
+  is the cheaper first lever for scrape-cost pressure and should be preferred
+  until probe CPU/RAM on one machine is the actual limit.
+
+  Relates to the distributed multi-agent / multi-location vision in Version 1.0.
+
+---
+
 ### User Interface
 
 Optional web interface:
