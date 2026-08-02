@@ -9,8 +9,11 @@
 package metrics
 
 import (
+	"time"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
+	dto "github.com/prometheus/client_model/go"
 
 	"bodsch.me/sentinel/internal/store"
 	"bodsch.me/sentinel/pkg/version"
@@ -56,6 +59,47 @@ func NewRegistry() *prometheus.Registry {
 	reg.MustRegister(buildInfo)
 
 	return reg
+}
+
+// NewTimingGatherer wraps reg so the wall time of each Gather — the O(N) render
+// cost of building all metric families, which excludes HTTP encoding and the
+// network write to the scraper — is recorded into a newly registered
+// sentinel_scrape_duration_seconds gauge. It returns a Gatherer for the metrics
+// handler to serve in place of the bare registry.
+//
+// The duration is Set after Gather returns, so the exported value reflects the
+// previous scrape (one scrape behind) — the conventional behaviour for a
+// self-measuring metric and exact enough for sizing scrape_timeout. The value is
+// the most recent scrape's render time; with overlapping scrapes it is
+// approximate (a plain gauge is last-writer-wins).
+//
+// Parameters:
+//   - reg: the registry to wrap and to register the gauge on.
+//
+// It panics via MustRegister if the gauge is already registered (a wiring bug).
+func NewTimingGatherer(reg *prometheus.Registry) prometheus.Gatherer {
+	g := prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: Namespace,
+		Name:      "scrape_duration_seconds",
+		Help:      "Time to gather all metric series on the last scrape (render cost; O(N) in targets, excludes HTTP encoding and network). Size scrape_timeout above it.",
+	})
+	reg.MustRegister(g)
+	return &timingGatherer{inner: reg, dur: g}
+}
+
+// timingGatherer records how long the wrapped Gatherer takes into dur.
+type timingGatherer struct {
+	inner prometheus.Gatherer
+	dur   prometheus.Gauge
+}
+
+// Gather times the inner Gather and records it, exporting the previous scrape's
+// render time on this one.
+func (t *timingGatherer) Gather() ([]*dto.MetricFamily, error) {
+	start := time.Now()
+	mfs, err := t.inner.Gather()
+	t.dur.Set(time.Since(start).Seconds())
+	return mfs, err
 }
 
 // RegisterRuntimeCollectors adds the standard Go runtime and process collectors

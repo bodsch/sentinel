@@ -18,7 +18,7 @@ func newTestServer(t *testing.T) *Server {
 	g := prometheus.NewGauge(prometheus.GaugeOpts{Name: "sentinel_test_metric", Help: "test"})
 	g.Set(1)
 	reg.MustRegister(g)
-	return New(Options{Addr: ":0", Registry: reg})
+	return New(Options{Addr: ":0", Gatherer: reg})
 }
 
 func do(t *testing.T, s *Server, path string) (int, string) {
@@ -73,7 +73,7 @@ func TestStartAndShutdown(t *testing.T) {
 	t.Parallel()
 
 	reg := prometheus.NewRegistry()
-	s := New(Options{Addr: "127.0.0.1:0", Registry: reg})
+	s := New(Options{Addr: "127.0.0.1:0", Gatherer: reg})
 	if err := s.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
