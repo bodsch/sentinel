@@ -117,9 +117,16 @@ func serve(cfg options, loaded *config.Config, logger *slog.Logger) int {
 	st := store.New()
 	reg := metrics.NewRegistry()
 
+	// Observation-based metrics: latency histograms fed at probe time (they
+	// capture every probe, unlike the scrape-time state gauges). They register
+	// their own histograms on reg and are notified by the scheduler.
 	sched := scheduler.New(scheduler.Options{
-		Clock:  clock.Real{},
-		Store:  st,
+		Clock: clock.Real{},
+		Store: st,
+		Observer: scheduler.Observers{
+			metrics.NewProbeDurationObserver(reg),
+			httpprobe.NewTTFBObserver(reg),
+		},
 		Logger: logger,
 	})
 

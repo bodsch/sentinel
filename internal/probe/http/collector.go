@@ -23,7 +23,6 @@ type Collector struct {
 	dnsDuration *prometheus.Desc
 	tcpDuration *prometheus.Desc
 	tlsDuration *prometheus.Desc
-	ttfb        *prometheus.Desc
 	download    *prometheus.Desc
 	redirects   *prometheus.Desc
 	certExpiry  *prometheus.Desc
@@ -43,7 +42,6 @@ func NewCollector(results resultSource) *Collector {
 		dnsDuration: desc("http_dns_duration_seconds", "DNS resolution time of the final hop."),
 		tcpDuration: desc("http_tcp_connect_duration_seconds", "TCP connect time of the final hop."),
 		tlsDuration: desc("http_tls_handshake_duration_seconds", "TLS handshake time of the final hop."),
-		ttfb:        desc("http_ttfb_seconds", "Time to first response byte of the final hop."),
 		download:    desc("http_download_duration_seconds", "Response body download time of the final hop."),
 		redirects:   desc("http_redirects", "Number of redirects followed on the last probe."),
 		certExpiry:  desc("tls_certificate_expiry_timestamp_seconds", "Unix timestamp when the leaf certificate expires."),
@@ -58,7 +56,6 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.dnsDuration
 	ch <- c.tcpDuration
 	ch <- c.tlsDuration
-	ch <- c.ttfb
 	ch <- c.download
 	ch <- c.redirects
 	ch <- c.certExpiry
@@ -89,7 +86,6 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 		gauge(c.dnsDuration, t.DNS.Seconds())
 		gauge(c.tcpDuration, t.Connect.Seconds())
 		gauge(c.tlsDuration, t.TLS.Seconds())
-		gauge(c.ttfb, t.TTFB.Seconds())
 		gauge(c.download, t.Download.Seconds())
 		gauge(c.redirects, float64(len(diag.Redirects)))
 

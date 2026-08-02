@@ -89,10 +89,8 @@ func TestProbeCollector(t *testing.T) {
 		t.Errorf("probe_success{bad} = %v ok=%v, want 0", v, ok)
 	}
 
-	// duration
-	if v, ok := gatherValue(t, reg, "sentinel_probe_duration_seconds", map[string]string{"target": "ok"}); !ok || v != 0.15 {
-		t.Errorf("probe_duration{ok} = %v, want 0.15", v)
-	}
+	// probe_duration_seconds is now a histogram fed at probe time by
+	// ProbeDurationObserver (see histograms_test.go), no longer a collector gauge.
 
 	// failure_info: present for the failing target with the reason, absent for ok
 	if _, ok := gatherValue(t, reg, "sentinel_probe_failure_info", map[string]string{"target": "bad", "reason": "timeout"}); !ok {

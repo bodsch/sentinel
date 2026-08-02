@@ -25,7 +25,6 @@ type ProbeCollector struct {
 	skips   SkipSource
 
 	success     *prometheus.Desc
-	duration    *prometheus.Desc
 	lastSuccess *prometheus.Desc
 	failureInfo *prometheus.Desc
 	skipped     *prometheus.Desc
@@ -40,10 +39,6 @@ func NewProbeCollector(results ResultSource, skips SkipSource) *ProbeCollector {
 		success: prometheus.NewDesc(
 			Namespace+"_probe_success",
 			"1 if the last probe succeeded, else 0.",
-			BaseLabelNames, nil),
-		duration: prometheus.NewDesc(
-			Namespace+"_probe_duration_seconds",
-			"Total duration of the last probe run.",
 			BaseLabelNames, nil),
 		lastSuccess: prometheus.NewDesc(
 			Namespace+"_probe_last_success_timestamp_seconds",
@@ -63,7 +58,6 @@ func NewProbeCollector(results ResultSource, skips SkipSource) *ProbeCollector {
 // Describe implements prometheus.Collector.
 func (c *ProbeCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.success
-	ch <- c.duration
 	ch <- c.lastSuccess
 	ch <- c.failureInfo
 	ch <- c.skipped
@@ -79,7 +73,6 @@ func (c *ProbeCollector) Collect(ch chan<- prometheus.Metric) {
 			success = 1.0
 		}
 		ch <- prometheus.MustNewConstMetric(c.success, prometheus.GaugeValue, success, labels...)
-		ch <- prometheus.MustNewConstMetric(c.duration, prometheus.GaugeValue, rec.Result.Duration.Seconds(), labels...)
 
 		if !rec.LastSuccess.IsZero() {
 			ch <- prometheus.MustNewConstMetric(c.lastSuccess, prometheus.GaugeValue, float64(rec.LastSuccess.Unix()), labels...)
