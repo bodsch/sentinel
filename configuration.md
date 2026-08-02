@@ -408,18 +408,40 @@ Behaviour:
 
 ## TCP Configuration
 
-Example:
+A TCP target checks that a connection to `address` (`host:port`) can be
+established, and optionally validates a banner the server sends on connect. The
+connect time is exposed as `sentinel_tcp_connect_duration_seconds`; availability
+is the generic `sentinel_probe_success`.
+
+Connection-only check:
+
 ```
-tcp:
-  address: mail.example.org:25
-  timeout: 5s
+targets:
+  - name: postgres
+    timeout: 5s          # target-level total timeout
+    tcp:
+      address: db.example.org:5432
 ```
-Optional banner validation:
+
+With banner validation (e.g. an SSH or SMTP greeting):
+
 ```
-tcp:
-  expect:
-    banner: "ESMTP"
+targets:
+  - name: ssh
+    tcp:
+      address: ssh.example.org:22
+      expect:
+        banner_regex:
+          - "^SSH-2.0"
 ```
+
+- `tcp.address` is required and must be `host:port` with a numeric port in
+  1-65535.
+- `expect.banner_regex` patterns must **all** match the banner. When set, the
+  probe reads a banner (up to 4 KiB) after connecting, bounded by the target
+  timeout; if none arrives the check fails. When omitted, only the connection is
+  checked (no read).
+
 ---
 
 ## ICMP Configuration

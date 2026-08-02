@@ -211,6 +211,30 @@ targets:
 	}
 }
 
+func TestTCPValid(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseResolve(t, `
+targets:
+  - name: ssh
+    tcp:
+      address: example.com:22
+      expect:
+        banner_regex:
+          - "^SSH-2.0"
+`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tc := cfg.Targets[0].TCP
+	if tc == nil || tc.Address != "example.com:22" {
+		t.Fatalf("tcp block = %+v, want address example.com:22", tc)
+	}
+	if len(tc.Expect.BannerRegex) != 1 || tc.Expect.BannerRegex[0] != "^SSH-2.0" {
+		t.Errorf("banner_regex = %v, want [^SSH-2.0]", tc.Expect.BannerRegex)
+	}
+}
+
 func TestValidationErrors(t *testing.T) {
 	t.Parallel()
 
@@ -308,6 +332,31 @@ func TestValidationErrors(t *testing.T) {
 			name:    "body with GET",
 			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n      method: GET\n      body: hi\n",
 			wantSub: "http.body is not allowed with method GET",
+		},
+		{
+			name:    "tcp missing address",
+			yaml:    "targets:\n  - name: x\n    tcp:\n      expect:\n        banner_regex: [\"^SSH\"]\n",
+			wantSub: "tcp.address is required",
+		},
+		{
+			name:    "tcp address without port",
+			yaml:    "targets:\n  - name: x\n    tcp:\n      address: example.com\n",
+			wantSub: "must be host:port",
+		},
+		{
+			name:    "tcp non-numeric port",
+			yaml:    "targets:\n  - name: x\n    tcp:\n      address: example.com:ssh\n",
+			wantSub: "must be a number in 1-65535",
+		},
+		{
+			name:    "tcp bad banner regex",
+			yaml:    "targets:\n  - name: x\n    tcp:\n      address: example.com:22\n      expect:\n        banner_regex: [\"(\"]\n",
+			wantSub: "does not compile",
+		},
+		{
+			name:    "two protocol blocks",
+			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n    tcp:\n      address: a.example:22\n",
+			wantSub: "multiple protocol blocks",
 		},
 	}
 

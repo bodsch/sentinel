@@ -472,21 +472,12 @@ sentinel_dns_answer_count
 sentinel_tcp_connect_duration_seconds
 ```
 
----
+Type: `Gauge`. The connection-establishment time of the last probe, in seconds
+(includes name resolution). Exposed for `tcp` targets.
 
-### TCP Availability
-
-```
-sentinel_tcp_available
-```
-
-Values:
-
-```
-1 = reachable
-
-0 = unreachable
-```
+Availability is not a separate metric: the generic `sentinel_probe_success`
+already reports 1/0 for every target, TCP included, and the total time also
+feeds the `sentinel_probe_duration_seconds` histogram.
 
 ---
 

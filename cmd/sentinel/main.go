@@ -19,6 +19,7 @@ import (
 	"bodsch.me/sentinel/internal/probe"
 	dnsprobe "bodsch.me/sentinel/internal/probe/dns"
 	httpprobe "bodsch.me/sentinel/internal/probe/http"
+	tcpprobe "bodsch.me/sentinel/internal/probe/tcp"
 	"bodsch.me/sentinel/internal/scheduler"
 	"bodsch.me/sentinel/internal/server"
 	"bodsch.me/sentinel/internal/store"
@@ -154,6 +155,7 @@ func serve(cfg options, loaded *config.Config, logger *slog.Logger) int {
 	reg.MustRegister(metrics.NewProbeCollector(st, sched))
 	reg.MustRegister(httpprobe.NewCollector(st))
 	reg.MustRegister(dnsprobe.NewCollector(st))
+	reg.MustRegister(tcpprobe.NewCollector(st))
 
 	// Expose the process's own runtime health (goroutines, heap, GC, CPU, FDs).
 	metrics.RegisterRuntimeCollectors(reg)
@@ -216,8 +218,22 @@ func buildProber(target config.Target) (probe.Prober, string, error) {
 	case target.DNS != nil:
 		p, err := dnsprobe.New(dnsOptions(target))
 		return p, dnsprobe.ProbeType, err
+	case target.TCP != nil:
+		p, err := tcpprobe.New(tcpOptions(target))
+		return p, tcpprobe.ProbeType, err
 	default:
 		return nil, "", fmt.Errorf("target %q has no protocol block", target.Name)
+	}
+}
+
+// tcpOptions maps a resolved config target to TCP prober options.
+func tcpOptions(target config.Target) tcpprobe.Options {
+	tc := target.TCP
+	return tcpprobe.Options{
+		Name:        target.Name,
+		Address:     tc.Address,
+		BannerRegex: tc.Expect.BannerRegex,
+		Timeout:     target.ResolvedTimeout(),
 	}
 }
 
