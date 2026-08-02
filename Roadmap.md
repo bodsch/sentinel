@@ -142,7 +142,10 @@ Planned:
   headers (a `Host` key maps to the request host); sent only to the target's own
   host, never carried across a redirect to a different host. See
   `configuration.md`.
-- request body support
+- ~~request body support~~ **(implemented)**: `http.method` now accepts
+  GET/HEAD/POST/PUT/PATCH/DELETE and `http.body` sends a request body (set
+  Content-Type via `headers`). A redirect is followed as a bodyless GET. See
+  `configuration.md`.
 - ~~authentication~~ **(implemented)**: `http.basic_auth` and `http.bearer_token`
   (mutually exclusive with each other and an explicit Authorization header),
   applied same-host-only for leak safety. Secrets are inline; **planned
