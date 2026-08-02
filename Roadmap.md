@@ -132,6 +132,13 @@ Planned:
 - XPath validation
 - body size validation
 - compression analysis
+- configurable `max_body_bytes` cap (per-target override; today a fixed 1 MiB
+  global default). Motivation: the blackbox_exporter benchmark
+  (`docs/benchmark-vs-blackbox.md`, Dimension C) showed the fixed cap truncates
+  large pages (e.g. welt.de at 1.31 MiB), so Sentinel's `download`/`total`
+  timings are not comparable to a full-body probe on download-heavy targets.
+  A per-target cap (raise where the full transfer time matters, keep low as a
+  DoS safeguard elsewhere) restores comparable totals without losing the guard.
 
 ---
 
