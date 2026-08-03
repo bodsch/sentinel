@@ -325,6 +325,42 @@ Rules:
   (`password_file` / `bearer_token_file`) is a planned enhancement — see
   `Roadmap.md`.
 
+### TLS verification
+
+For HTTPS targets Sentinel **verifies the certificate chain against the system
+roots by default** — an expired, wrong-host, or untrusted (self-signed /
+unknown-CA) certificate fails the probe. Expiry and remaining-days are always
+reported as metrics, even on failure.
+
+```
+targets:
+  # Internal endpoint with a private CA: verify against that CA (secure).
+  - name: internal-api
+    http:
+      url: https://api.internal.example
+      tls:
+        ca_file: /etc/sentinel/internal-ca.pem
+
+  # Self-signed endpoint you cannot verify: accept any certificate.
+  - name: appliance
+    http:
+      url: https://192.0.2.10/
+      tls:
+        insecure_skip_verify: true
+```
+
+- **default** (no `tls` block) → verify against the system roots.
+- `ca_file` → verify against a custom PEM bundle instead (for internal CAs). The
+  file is read at startup; a missing/invalid file is a startup error.
+- `insecure_skip_verify: true` → accept **any** certificate (chain trust is not
+  required); expiry and hostname are still reported and
+  `sentinel_tls_certificate_valid` still reflects the *real* validity, so you can
+  alert on an untrusted cert even while accepting it. Use only for endpoints you
+  cannot otherwise verify. **Mutually exclusive with `ca_file`.**
+- **Security note:** without verification a MITM presenting a certificate with
+  the right hostname would be accepted (and any configured credentials sent to
+  it), so `insecure_skip_verify` genuinely lowers security — prefer `ca_file`.
+
 ---
 
 ## HTTP Validation

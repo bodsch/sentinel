@@ -15,6 +15,8 @@ package http
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"net/http"
@@ -78,6 +80,12 @@ type Options struct {
 	// Body is the request body sent with the initial request. Redirects are
 	// followed as GET with no body.
 	Body string
+	// TLSSkipVerify accepts any server certificate (skips chain trust); expiry
+	// and hostname are still reported but no longer fail the probe.
+	TLSSkipVerify bool
+	// TLSRoots is the certificate pool the chain is verified against. Nil means
+	// the system roots (the default). Ignored when TLSSkipVerify is set.
+	TLSRoots *x509.CertPool
 }
 
 // JSONCheck is one JSONPath assertion (raw path plus an optional expected scalar
@@ -102,9 +110,21 @@ type Prober struct {
 	basicPass       string
 	bearerToken     string
 	body            string
-	origin          string // canonical scheme://host:port of the target URL
+	tlsSkipVerify   bool           // operator's opt-out; applied to the target's own origin only
+	tlsRoots        *x509.CertPool // operator's CA (nil = system); applied to the target's origin only
+	origin          string         // canonical scheme://host:port of the target URL
 	validators      []validator.Validator
 	transport       *http.Transport
+
+	// Per-hop TLS state, set before each RoundTrip and read by verifyConnection
+	// during the (synchronous, same-goroutine) handshake. A Prober only ever runs
+	// one probe at a time (the scheduler's skip-if-running), and hops within a run
+	// are sequential, so these need no synchronisation.
+	tlsHost       string
+	hopRoots      *x509.CertPool
+	hopSkipVerify bool
+	tlsInfo       *TLSInfo
+	tlsReason     probe.FailureReason
 }
 
 // compile-time check.
@@ -137,11 +157,31 @@ func New(opts Options) (*Prober, error) {
 		basicPass:       opts.BasicAuthPass,
 		bearerToken:     strings.TrimSpace(opts.BearerToken),
 		body:            opts.Body,
+		tlsSkipVerify:   opts.TLSSkipVerify,
+		tlsRoots:        opts.TLSRoots,
 		origin:          originKey(opts.URL),
 		validators:      validators,
-		transport:       newTransport(),
 	}
+	// The transport verifies the certificate during the handshake via
+	// p.verifyConnection, so an untrusted certificate aborts before any request
+	// (and its credentials) is sent.
+	p.transport = newTransport(p.verifyConnection)
 	return p, nil
+}
+
+// verifyConnection runs during the TLS handshake (before any request is sent).
+// It inspects the presented certificate under the current hop's policy, records
+// the diagnostics, and returns an error — aborting the handshake — when the
+// certificate is unacceptable and the operator has not opted out. Because it can
+// abort before application data, credentials never reach an untrusted server.
+func (p *Prober) verifyConnection(cs tls.ConnectionState) error {
+	info, reason := inspectTLS(&cs, p.tlsHost, time.Now(), p.hopRoots, p.hopSkipVerify)
+	p.tlsInfo = info
+	p.tlsReason = reason
+	if reason != probe.ReasonNone {
+		return fmt.Errorf("tls: %s", reason)
+	}
+	return nil
 }
 
 // originKey returns a canonical scheme://host:port key for same-origin checks:
@@ -289,35 +329,48 @@ func (p *Prober) run(ctx context.Context) (*Diagnostics, probe.Timings, probe.Fa
 		}
 		req.Header.Set("User-Agent", p.userAgent)
 
+		sameOrigin := originKey(current) == p.origin
+
 		// Apply custom headers and auth only to the target's own origin
 		// (scheme+host+port): a redirect to a different origin must not receive
 		// the credentials or headers, which would leak them to a third party (or
 		// resend them in clear after an https->http downgrade).
-		if originKey(current) == p.origin {
+		if sameOrigin {
 			p.applyRequestHeaders(req, bodyStr != "")
 		}
+
+		// The operator's TLS policy (skip-verify / custom CA) applies only to the
+		// target's own origin. A redirect to a different origin is always verified
+		// against the system roots, so skip-verify cannot be inherited by a
+		// third-party hop and a custom CA cannot wrongly reject a public one.
+		p.tlsHost = hostname(current)
+		p.hopSkipVerify = sameOrigin && p.tlsSkipVerify
+		p.hopRoots = nil
+		if sameOrigin {
+			p.hopRoots = p.tlsRoots
+		}
+		p.tlsInfo = nil
+		p.tlsReason = probe.ReasonNone
 
 		tr := newHopTrace()
 		req = req.WithContext(traceContext(req.Context(), tr))
 
 		resp, err := p.transport.RoundTrip(req)
 		if err != nil {
+			// verifyConnection rejected the certificate during the handshake (so no
+			// request/credentials were sent): surface the cert diagnostics + reason.
+			if p.tlsReason != probe.ReasonNone && p.tlsInfo != nil {
+				diag.TLS = p.tlsInfo
+				diag.FinalURL = current
+				return diag, timings, p.tlsReason
+			}
 			return diag, timings, classifyError(err)
 		}
 
-		// Inspect TLS on every hop, not only the final one: an expired or
-		// hostname-mismatched certificate on an intermediate redirect hop is a
-		// real failure and must not be masked by a healthy final target.
-		if resp.TLS != nil {
-			info, tlsReason := inspectTLS(resp.TLS, hostname(current), time.Now())
-			diag.TLS = info
-			if tlsReason != probe.ReasonNone {
-				timings = tr.timings(time.Now())
-				_ = resp.Body.Close()
-				diag.FinalURL = current
-				diag.StatusCode = resp.StatusCode
-				return diag, timings, tlsReason
-			}
+		// Capture certificate diagnostics from the (accepted) handshake. For a
+		// skip-verify origin the cert may be untrusted (Valid=false) yet accepted.
+		if p.tlsInfo != nil {
+			diag.TLS = p.tlsInfo
 		}
 
 		// Follow a redirect if configured to.

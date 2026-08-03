@@ -164,6 +164,12 @@ Planned:
 - XPath validation
 - body size validation
 - compression analysis
+- optional egress guard for redirects: reject redirect targets that resolve to
+  private/loopback/link-local ranges, or a per-target host allow-list. A
+  security-audit finding (low severity): an attacker-controlled `http→http`
+  redirect can currently drive the probe to unconfigured internal hosts (blind
+  recon via `/metrics`; credentials/body are not leaked — the origin guard
+  strips them). `follow_redirects: false` fully mitigates it today.
 - ~~configurable `max_body_bytes` cap~~ **(implemented)**. Per-target override
   already worked via the normal `defaults` + target merge; added an explicit
   per-target opt-out (`max_body_bytes: 0` = no cap, full body read into memory,
@@ -178,9 +184,15 @@ Planned:
 
 ### TLS Improvements
 
+- ~~certificate chain inspection~~ **(implemented)**: HTTPS targets now verify
+  the chain against the system roots by default (untrusted/expired/wrong-host
+  fails), with per-target `tls.ca_file` (custom CA) and `tls.insecure_skip_verify`
+  (accept any cert; validity still reported honestly). Closed a MITM
+  credential-leak found in the security audit. See `configuration.md` → *TLS
+  verification*.
+
 Planned:
 
-- certificate chain inspection
 - OCSP validation
 - certificate SAN validation
 - certificate expiration alerts

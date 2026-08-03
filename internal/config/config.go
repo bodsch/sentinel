@@ -124,8 +124,25 @@ type HTTPConfig struct {
 	// Body is the request body sent with the initial request (typically with
 	// POST/PUT/PATCH). Set its Content-Type via Headers. Redirects are followed
 	// as GET without a body.
-	Body   string `yaml:"body"`
-	Expect Expect `yaml:"expect"`
+	Body string `yaml:"body"`
+	// TLS tunes certificate verification for HTTPS targets. When nil, the
+	// certificate chain is verified against the system roots (the secure default).
+	TLS    *TLSConfig `yaml:"tls"`
+	Expect Expect     `yaml:"expect"`
+}
+
+// TLSConfig tunes HTTPS certificate verification for a target. By default the
+// chain is verified against the system roots and an untrusted/expired/wrong-host
+// certificate fails the probe.
+type TLSConfig struct {
+	// InsecureSkipVerify accepts any certificate (skips chain trust); expiry and
+	// hostname are still reported as diagnostics but no longer fail the probe.
+	// Use only for targets whose certificate you cannot verify (e.g. a
+	// self-signed internal endpoint). Mutually exclusive with CAFile.
+	InsecureSkipVerify bool `yaml:"insecure_skip_verify"`
+	// CAFile is a PEM bundle to verify the chain against instead of the system
+	// roots (the secure way to monitor an internal-CA endpoint).
+	CAFile string `yaml:"ca_file"`
 }
 
 // BasicAuth holds HTTP Basic credentials. The password may be empty; the username

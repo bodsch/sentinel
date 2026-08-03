@@ -417,10 +417,16 @@ sentinel_tls_certificate_valid
 Values:
 
 ```
-1 = valid
+1 = valid (chain trusted, hostname matches, not expired)
 
 0 = invalid
 ```
+
+`1` requires the certificate chain to verify against the trusted roots (system
+roots, or a target's `tls.ca_file`), the hostname to match, and the validity
+window to be current. It stays honest even when a target sets
+`tls.insecure_skip_verify` — an accepted-but-untrusted certificate reports `0`
+here while the probe still succeeds, so you can alert on `== 0` regardless.
 
 ---
 

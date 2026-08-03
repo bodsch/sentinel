@@ -6,6 +6,7 @@ import (
 	nethttp "net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -315,7 +316,11 @@ func TestRedirectDowngrade(t *testing.T) {
 	secure.StartTLS()
 	defer secure.Close()
 
-	res := runProbe(t, baseOpts(secure.URL))
+	// Trust the secure hop's cert so TLS inspection passes and the *downgrade*
+	// (not an untrusted-cert failure) is what stops the probe.
+	opts := baseOpts(secure.URL)
+	opts.TLSRoots = certPool(t, cert)
+	res := runProbe(t, opts)
 	if res.FailureReason != probe.ReasonDowngrade {
 		t.Fatalf("reason = %q, want downgrade", res.FailureReason)
 	}
@@ -361,7 +366,10 @@ func TestTLSValidCert(t *testing.T) {
 	srv := newTLSServer(t, cert, func(w nethttp.ResponseWriter, r *nethttp.Request) { w.WriteHeader(200) })
 	defer srv.Close()
 
-	res := runProbe(t, baseOpts(srv.URL))
+	// Trust the test cert so the default chain verification passes.
+	opts := baseOpts(srv.URL)
+	opts.TLSRoots = certPool(t, cert)
+	res := runProbe(t, opts)
 	if !res.Success {
 		t.Fatalf("expected success, got %q", res.FailureReason)
 	}
@@ -369,11 +377,110 @@ func TestTLSValidCert(t *testing.T) {
 	if d.TLS == nil {
 		t.Fatal("expected TLS diagnostics")
 	}
-	if !d.TLS.HostnameValid {
-		t.Error("hostname should be valid")
+	if !d.TLS.HostnameValid || !d.TLS.Valid {
+		t.Errorf("expected valid+hostname-valid cert, got %+v", d.TLS)
 	}
 	if d.TLS.RemainingDays < 1 {
 		t.Errorf("remaining days = %d, want >= 1", d.TLS.RemainingDays)
+	}
+}
+
+func TestTLSUntrustedCertFails(t *testing.T) {
+	t.Parallel()
+
+	// A self-signed cert with valid dates and hostname, but no trusted CA.
+	cert := makeCert(t, time.Now().Add(-time.Hour), time.Now().Add(48*time.Hour), nil, localhostIPs())
+	srv := newTLSServer(t, cert, func(w nethttp.ResponseWriter, r *nethttp.Request) { w.WriteHeader(200) })
+	defer srv.Close()
+
+	// Default policy: verify the chain against the system roots -> untrusted.
+	res := runProbe(t, baseOpts(srv.URL))
+	if res.Success {
+		t.Fatal("expected an untrusted self-signed cert to fail by default")
+	}
+	if res.FailureReason != probe.ReasonCertificateInvalid {
+		t.Errorf("reason = %q, want certificate_invalid", res.FailureReason)
+	}
+}
+
+// TestTLSUntrustedAbortsBeforeRequest is the core of the security fix: against an
+// untrusted certificate under default verification, the handshake must abort
+// before the request is sent, so credentials never reach the (possibly MITM)
+// server. The server records whether it was ever hit.
+func TestTLSUntrustedAbortsBeforeRequest(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu  sync.Mutex
+		hit bool
+	)
+	cert := makeCert(t, time.Now().Add(-time.Hour), time.Now().Add(48*time.Hour), nil, localhostIPs())
+	srv := newTLSServer(t, cert, func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		mu.Lock()
+		hit = true
+		mu.Unlock()
+		w.WriteHeader(200)
+	})
+	defer srv.Close()
+
+	opts := baseOpts(srv.URL) // default verify; the self-signed cert is untrusted
+	opts.BasicAuthUser = "alice"
+	opts.BasicAuthPass = "s3cret"
+	res := runProbe(t, opts)
+	if res.Success || res.FailureReason != probe.ReasonCertificateInvalid {
+		t.Fatalf("expected certificate_invalid, got success=%v reason=%q", res.Success, res.FailureReason)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if hit {
+		t.Error("the request reached the server: credentials were sent before the untrusted cert was rejected")
+	}
+}
+
+// TestTLSSkipVerifyNotAppliedCrossOrigin verifies the operator's TLS policy is
+// origin-scoped: a skip-verify target that redirects to a *different* origin does
+// not carry skip-verify to that hop, so its untrusted cert still fails.
+func TestTLSSkipVerifyNotAppliedCrossOrigin(t *testing.T) {
+	t.Parallel()
+
+	cert := makeCert(t, time.Now().Add(-time.Hour), time.Now().Add(48*time.Hour), nil, localhostIPs())
+	// Cross-origin target (a different port -> different origin), untrusted.
+	target := newTLSServer(t, cert, func(w nethttp.ResponseWriter, r *nethttp.Request) { w.WriteHeader(200) })
+	defer target.Close()
+	// Origin the operator configures (skip-verify), redirects to the target.
+	origin := newTLSServer(t, cert, func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		nethttp.Redirect(w, r, target.URL, nethttp.StatusFound)
+	})
+	defer origin.Close()
+
+	opts := baseOpts(origin.URL)
+	opts.TLSSkipVerify = true // accepted for the origin only
+	res := runProbe(t, opts)
+	if res.Success {
+		t.Fatal("skip-verify must not carry to the cross-origin redirect target")
+	}
+	if res.FailureReason != probe.ReasonCertificateInvalid {
+		t.Errorf("reason = %q, want certificate_invalid on the cross-origin hop", res.FailureReason)
+	}
+}
+
+func TestTLSSkipVerifyAcceptsUntrusted(t *testing.T) {
+	t.Parallel()
+
+	cert := makeCert(t, time.Now().Add(-time.Hour), time.Now().Add(48*time.Hour), nil, localhostIPs())
+	srv := newTLSServer(t, cert, func(w nethttp.ResponseWriter, r *nethttp.Request) { w.WriteHeader(200) })
+	defer srv.Close()
+
+	opts := baseOpts(srv.URL)
+	opts.TLSSkipVerify = true
+	res := runProbe(t, opts)
+	if !res.Success {
+		t.Fatalf("skip-verify should accept an untrusted cert, got %q", res.FailureReason)
+	}
+	// Diagnostics stay honest: an untrusted cert is reported Valid=false.
+	if d := diag(t, res); d.TLS == nil || d.TLS.Valid {
+		t.Errorf("expected Valid=false diagnostic for untrusted cert, got %+v", d.TLS)
 	}
 }
 
