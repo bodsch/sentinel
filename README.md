@@ -333,6 +333,23 @@ Planned improvements:
 
 ---
 
+## Continuous Integration
+
+Forgejo Actions workflows live in `.forgejo/workflows/`:
+
+- **CI** (`ci.yml`) — on push to `main` and every pull request: gofmt check,
+  `go vet`, `golangci-lint` (incl. gosec), `govulncheck`, `go test -race`, and
+  the build. Mirrors `make ci` + `make vuln`, so `make ci vuln` reproduces it
+  locally.
+- **Release** (`release.yml`) — on a `v*` tag: `make release` cross-compiles the
+  static `linux/darwin × amd64/arm64` binaries and publishes them (with
+  `SHA256SUMS`) as release assets.
+
+The workflows assume Actions is enabled with a runner labelled `ubuntu-latest`
+(adjust `runs-on` to your runner) — see the header comments in each file.
+
+---
+
 ## Technology Choice
 
 Sentinel is implemented in Go.
