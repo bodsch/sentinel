@@ -218,7 +218,7 @@ func TestRedirectFollow(t *testing.T) {
 	srv := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
 		switch r.URL.Path {
 		case "/a":
-			nethttp.Redirect(w, r, "/b", 302)
+			nethttp.Redirect(w, r, "/b", nethttp.StatusFound)
 		case "/b":
 			w.WriteHeader(200)
 		default:
@@ -246,9 +246,9 @@ func TestRedirectLoop(t *testing.T) {
 	srv := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
 		switch r.URL.Path {
 		case "/a":
-			nethttp.Redirect(w, r, "/b", 302)
+			nethttp.Redirect(w, r, "/b", nethttp.StatusFound)
 		case "/b":
-			nethttp.Redirect(w, r, "/a", 302)
+			nethttp.Redirect(w, r, "/a", nethttp.StatusFound)
 		}
 	}))
 	defer srv.Close()
@@ -265,7 +265,7 @@ func TestRedirectLimit(t *testing.T) {
 	// Each hop redirects to a new unique path, so it is never a loop — only the
 	// limit stops it.
 	srv := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
-		nethttp.Redirect(w, r, r.URL.Path+"x", 302)
+		nethttp.Redirect(w, r, r.URL.Path+"x", nethttp.StatusFound)
 	}))
 	defer srv.Close()
 
@@ -285,7 +285,7 @@ func TestRedirectNotFollowed(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
-		nethttp.Redirect(w, r, "/other", 302)
+		nethttp.Redirect(w, r, "/other", nethttp.StatusFound)
 	}))
 	defer srv.Close()
 
@@ -309,7 +309,7 @@ func TestRedirectDowngrade(t *testing.T) {
 
 	cert := makeCert(t, time.Now().Add(-time.Hour), time.Now().Add(time.Hour), nil, localhostIPs())
 	secure := httptest.NewUnstartedServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
-		nethttp.Redirect(w, r, plain.URL+"/", 302)
+		nethttp.Redirect(w, r, plain.URL+"/", nethttp.StatusFound)
 	}))
 	secure.TLS = &tls.Config{Certificates: []tls.Certificate{cert}}
 	secure.StartTLS()
@@ -481,7 +481,9 @@ func TestTLSExpiredOnRedirectHop(t *testing.T) {
 
 	mid := newTLSServer(t,
 		makeCert(t, time.Now().Add(-48*time.Hour), time.Now().Add(-time.Hour), nil, localhostIPs()),
-		func(w nethttp.ResponseWriter, r *nethttp.Request) { nethttp.Redirect(w, r, final.URL+"/", 302) })
+		func(w nethttp.ResponseWriter, r *nethttp.Request) {
+			nethttp.Redirect(w, r, final.URL+"/", nethttp.StatusFound)
+		})
 	defer mid.Close()
 
 	res := runProbe(t, baseOpts(mid.URL))

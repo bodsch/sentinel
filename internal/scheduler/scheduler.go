@@ -314,5 +314,6 @@ func jitter(name string, interval time.Duration) time.Duration {
 	}
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(name))
+	//nolint:gosec // G115: the result is bounded by interval (a positive int64) via the modulo.
 	return time.Duration(h.Sum64() % uint64(interval))
 }

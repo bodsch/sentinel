@@ -72,8 +72,15 @@ vet: ## Run go vet.
 	$(GO) vet ./...
 
 .PHONY: lint
-lint: ## Run golangci-lint (must be installed).
+lint: ## Run golangci-lint (config in .golangci.yml; gosec enabled).
 	$(GOLANGCI) run ./...
+
+.PHONY: vuln
+vuln: ## Scan deps and reachable code for known vulnerabilities (govulncheck).
+	$(GO) run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+.PHONY: sec
+sec: lint vuln ## Security checks: golangci-lint (incl. gosec) + govulncheck.
 
 .PHONY: tidy
 tidy: ## Tidy and verify go.mod/go.sum.
@@ -81,7 +88,7 @@ tidy: ## Tidy and verify go.mod/go.sum.
 	$(GO) mod verify
 
 .PHONY: ci
-ci: fmt vet lint test build ## Full CI pipeline: fmt, vet, lint, test (race), build.
+ci: fmt vet lint vuln test build ## Full CI pipeline: fmt, vet, lint, vuln, test (race), build.
 
 .PHONY: release
 release: ## Cross-compile static release binaries into dist/.
