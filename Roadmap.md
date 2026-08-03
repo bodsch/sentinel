@@ -2,7 +2,14 @@
 
 ## Project Status
 
-Sentinel is currently in the design phase.
+**Versions 0.1 and 0.2 are implemented and shipped.** The runtime skeleton
+(configuration → scheduler → probe → result store → `/metrics`) is complete, and
+three protocols run end-to-end: HTTP/HTTPS (full phase timing, methods, body,
+headers, auth, redirect handling, TLS chain verification), DNS (A/AAAA/MX/TXT)
+and TCP (connect + banner). Response validators cover status / body-regex /
+header / JSONPath, latency histograms are fed at probe time, and the build ships
+with security tooling (golangci-lint incl. gosec, govulncheck) and Forgejo CI /
+release pipelines. Later versions (0.3+) below are still planned.
 
 The roadmap focuses on building a stable monitoring foundation before adding advanced functionality.
 
@@ -18,8 +25,7 @@ Create a production-ready monitoring daemon for the **HTTP/HTTPS** use case, wit
 runtime skeleton in place so further protocols slot in without reworking the core. Version 0.1 is a
 deliberately narrow vertical slice — one protocol done end-to-end, not several done partially.
 
-> Status: design decided, implementation pending. The list below is the **planned 0.1 scope**, not
-> yet-shipped functionality.
+> Status: **shipped.** The list below is the 0.1 scope, all implemented; 0.2 (below) builds on it.
 
 ---
 
@@ -69,6 +75,9 @@ Metrics:
 ### Goal
 
 Increase diagnostic capabilities and expand beyond HTTP.
+
+> Status: **shipped.** Individual items below carry `(implemented)` / `Planned`
+> markers; everything marked implemented is in the current build.
 
 ---
 
@@ -228,6 +237,27 @@ Provides:
 - detailed error information
 - redirect chain
 - TLS information
+
+---
+
+### Security, Tooling & CI
+
+Implemented:
+
+- static analysis wired into the build: `golangci-lint` (incl. **gosec**),
+  reachable via `make lint`; **govulncheck** call-graph vulnerability scan via
+  `make vuln`; combined `make sec` and a `make ci` that mirrors the pipeline.
+- Forgejo Actions pipelines in `.forgejo/workflows/`: **CI** (gofmt, vet,
+  golangci-lint, govulncheck, `go test -race`, build) on push/PR, and **Release**
+  (cross-compiled `linux/darwin × amd64/arm64` static binaries + `SHA256SUMS`) on
+  a `v*` tag. See `README.md` → *Continuous Integration*.
+
+Planned:
+
+- signed release artifacts (checksums are published today; signing/attestation is
+  the next step)
+- SBOM generation on release
+- container image + image scanning
 
 ---
 

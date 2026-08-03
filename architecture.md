@@ -218,6 +218,16 @@ The probe uses:
 - HTTP tracing (`net/http/httptrace`) for per-phase timing
 - configurable total timeout
 
+**TLS verification happens *during* the handshake.** The transport dials with a
+`VerifyConnection` callback rather than post-hoc inspection, so an untrusted
+certificate aborts the handshake **before** the request (and any credentials) is
+sent — a MITM never receives the request body or auth header. Verification is
+**origin-scoped**: the operator's per-target policy (`tls.ca_file` /
+`tls.insecure_skip_verify`) applies only to the target's own origin; redirect
+hops to a different origin fall back to the system roots and cannot be downgraded.
+The chain is still inspected under `insecure_skip_verify`, so
+`sentinel_tls_certificate_valid` stays honest while the probe accepts the cert.
+
 ---
 
 ## HTTP Timing Model

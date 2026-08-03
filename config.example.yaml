@@ -107,6 +107,35 @@ targets:
       expect:
         status: 200
 
+  # Internal HTTPS endpoint served by a private CA: verify the chain against that
+  # CA bundle (secure). Without a tls block, verification uses the system roots.
+  - name: internal-api
+    interval: 30s
+    tags:
+      service: backend
+      environment: production
+      location: datacenter-1
+    http:
+      url: https://api.internal.example/health
+      tls:
+        ca_file: /etc/sentinel/internal-ca.pem
+      expect:
+        status: 200
+
+  # Self-signed appliance you cannot otherwise verify: accept any certificate.
+  # sentinel_tls_certificate_valid still reports the real (untrusted) validity,
+  # so you can alert on it while the probe keeps succeeding. Mutually exclusive
+  # with ca_file. Prefer ca_file where possible — this lowers security.
+  - name: appliance
+    interval: 1m
+    tags:
+      service: appliance
+      environment: production
+    http:
+      url: https://192.0.2.10/
+      tls:
+        insecure_skip_verify: true
+
   # Per-target max_body_bytes override: raise the cap on a large page so the
   # full download time is measured (overrides the 1 MiB default above).
   - name: large-report
