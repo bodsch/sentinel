@@ -45,7 +45,8 @@ sentinel --config /etc/sentinel/config.yaml
 | `--config` | path to the config file (env `SENTINEL_CONFIG` also honoured) |
 | `--validate` | load and fully validate the config, print any error, exit non-zero — do **not** start probes |
 | `--version` | print version/commit/build date and exit |
-| `--log-level` | override log level (default `info`) |
+| `--log-level` | override log level (default `info`): `debug`, `info`, `warn`, `error` |
+| `--log-format` | log output format (default `json`): `json` or `text` |
 | `--listen` | override the HTTP listen address (default `:8080`) |
 
 `--validate` is a dry-run intended for CI / GitOps: a config pull request can be checked before it

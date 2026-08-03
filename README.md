@@ -25,7 +25,8 @@ the complete runtime skeleton (configuration → scheduler → probe → result 
 already ships:
 
 - **HTTP/HTTPS** probes with full phase timing (methods GET/HEAD/POST/PUT/PATCH/DELETE, request body,
-  custom headers, Basic/Bearer auth, per-target body-size cap, redirect handling, TLS diagnostics)
+  custom headers, Basic/Bearer auth, per-target body-size cap, redirect handling, TLS chain
+  verification by default + diagnostics)
 - a **DNS** probe (A/AAAA/MX/TXT) and a **TCP** probe (connection check + optional banner validation)
 - response validators: status, body regex, header match, and **JSONPath** (`expect.json`)
 - latency **histograms** fed at probe time, plus per-phase gauges and `go_*`/`process_*` runtime metrics
@@ -119,6 +120,9 @@ Supported features:
 - body regex validation
 - JSONPath validation (`http.expect.json`)
 - redirect tracking, loop detection, HTTPS→HTTP downgrade detection
+- TLS certificate verification against system roots **by default** (untrusted,
+  expired or wrong-host certs fail the probe), with per-target opt-out
+  (`http.tls.insecure_skip_verify`) or a custom CA (`http.tls.ca_file`)
 - TLS certificate diagnostics (expiry, hostname, remaining days)
 
 Planned: HTTP/2 tuning, HTTP/3, XPath validation, compression analysis.
@@ -339,8 +343,8 @@ Forgejo Actions workflows live in `.forgejo/workflows/`:
 
 - **CI** (`ci.yml`) — on push to `main` and every pull request: gofmt check,
   `go vet`, `golangci-lint` (incl. gosec), `govulncheck`, `go test -race`, and
-  the build. Mirrors `make ci` + `make vuln`, so `make ci vuln` reproduces it
-  locally.
+  the build. Mirrors `make ci` (which already includes `vuln`), so `make ci`
+  reproduces it locally.
 - **Release** (`release.yml`) — on a `v*` tag: `make release` cross-compiles the
   static `linux/darwin × amd64/arm64` binaries and publishes them (with
   `SHA256SUMS`) as release assets.
