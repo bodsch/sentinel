@@ -109,7 +109,7 @@ func (p *Prober) dial(ctx context.Context) (*Diagnostics, probe.Timings, probe.F
 	if err != nil {
 		return diag, timings, classifyError(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if len(p.bannerRegex) == 0 {
 		return diag, timings, probe.ReasonNone

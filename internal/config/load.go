@@ -18,6 +18,7 @@ import (
 // are ready to use. On failure it returns an error describing every problem
 // found (parse errors, or one joined error covering all validation failures).
 func Load(path string) (*Config, error) {
+	//nolint:gosec // G304: the config path is an operator-supplied CLI/env argument, not attacker input.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("config: reading %q: %w", path, err)
