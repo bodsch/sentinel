@@ -237,6 +237,10 @@ func validateHTTP(label string, h *HTTPConfig) []error {
 		errs = append(errs, fmt.Errorf("config: %s: http.expect.json needs a response body and cannot be used with method HEAD", label))
 	}
 
+	if h.TLS != nil && h.TLS.InsecureSkipVerify && strings.TrimSpace(h.TLS.CAFile) != "" {
+		errs = append(errs, fmt.Errorf("config: %s: http.tls.insecure_skip_verify and http.tls.ca_file are mutually exclusive", label))
+	}
+
 	if h.ResolvedMaxRedirects() < 0 {
 		errs = append(errs, fmt.Errorf("config: %s: http.max_redirects must not be negative", label))
 	}

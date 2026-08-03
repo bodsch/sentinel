@@ -402,6 +402,11 @@ func TestValidationErrors(t *testing.T) {
 			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n      method: HEAD\n      expect:\n        json:\n          - path: \"$.status\"\n",
 			wantSub: "cannot be used with method HEAD",
 		},
+		{
+			name:    "tls insecure and ca_file both set",
+			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n      tls:\n        insecure_skip_verify: true\n        ca_file: /etc/ca.pem\n",
+			wantSub: "mutually exclusive",
+		},
 	}
 
 	for _, tc := range tests {

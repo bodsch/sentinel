@@ -4,11 +4,13 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -131,9 +133,13 @@ func serve(cfg options, loaded *config.Config, logger *slog.Logger) int {
 		Logger: logger,
 	})
 
+	// Parsed CA pools are shared across targets that reference the same ca_file,
+	// so each bundle is read and parsed once regardless of target count.
+	caPools := map[string]*x509.CertPool{}
+
 	for i := range loaded.Targets {
 		target := loaded.Targets[i]
-		prober, ptype, err := buildProber(target)
+		prober, ptype, err := buildProber(target, caPools)
 		if err != nil {
 			logger.Error("building probe", slog.String("target", target.Name), slog.Any("error", err))
 			return exitError
@@ -210,10 +216,14 @@ func serve(cfg options, loaded *config.Config, logger *slog.Logger) int {
 
 // buildProber constructs the prober for a target based on which protocol block
 // is present, returning the prober and its type label.
-func buildProber(target config.Target) (probe.Prober, string, error) {
+func buildProber(target config.Target, caPools map[string]*x509.CertPool) (probe.Prober, string, error) {
 	switch {
 	case target.HTTP != nil:
-		p, err := httpprobe.New(httpOptions(target))
+		opts, err := httpOptions(target, caPools)
+		if err != nil {
+			return nil, "", err
+		}
+		p, err := httpprobe.New(opts)
 		return p, httpprobe.ProbeType, err
 	case target.DNS != nil:
 		p, err := dnsprobe.New(dnsOptions(target))
@@ -250,8 +260,10 @@ func dnsOptions(target config.Target) dnsprobe.Options {
 	}
 }
 
-// httpOptions maps a resolved config target to HTTP prober options.
-func httpOptions(target config.Target) httpprobe.Options {
+// httpOptions maps a resolved config target to HTTP prober options. It returns
+// an error only when a configured tls.ca_file cannot be read or parsed. caPools
+// memoises parsed CA bundles by path so a shared ca_file is read once.
+func httpOptions(target config.Target, caPools map[string]*x509.CertPool) (httpprobe.Options, error) {
 	h := target.HTTP
 	opts := httpprobe.Options{
 		Name:            target.Name,
@@ -273,7 +285,35 @@ func httpOptions(target config.Target) httpprobe.Options {
 		opts.BasicAuthUser = h.BasicAuth.Username
 		opts.BasicAuthPass = h.BasicAuth.Password
 	}
-	return opts
+	if h.TLS != nil {
+		opts.TLSSkipVerify = h.TLS.InsecureSkipVerify
+		if caFile := strings.TrimSpace(h.TLS.CAFile); caFile != "" {
+			pool, err := loadCAPool(caFile, caPools)
+			if err != nil {
+				return opts, fmt.Errorf("http target %q: %w", target.Name, err)
+			}
+			opts.TLSRoots = pool
+		}
+	}
+	return opts, nil
+}
+
+// loadCAPool returns the certificate pool for the PEM bundle at path, reading and
+// parsing it once and memoising the result in cache.
+func loadCAPool(path string, cache map[string]*x509.CertPool) (*x509.CertPool, error) {
+	if pool, ok := cache[path]; ok {
+		return pool, nil
+	}
+	pem, err := os.ReadFile(path) //nolint:gosec // G304: ca_file is an operator-supplied config path.
+	if err != nil {
+		return nil, fmt.Errorf("reading tls.ca_file %q: %w", path, err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pem) {
+		return nil, fmt.Errorf("tls.ca_file %q contains no valid certificates", path)
+	}
+	cache[path] = pool
+	return pool, nil
 }
 
 // jsonChecks maps config JSONPath assertions to HTTP prober checks.

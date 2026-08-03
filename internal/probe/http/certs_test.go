@@ -52,3 +52,16 @@ func makeCert(t *testing.T, notBefore, notAfter time.Time, dnsNames []string, ip
 func localhostIPs() []net.IP {
 	return []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback}
 }
+
+// certPool returns a root pool trusting the given (self-signed) test certificate,
+// so a probe with TLSRoots set to it verifies the chain successfully.
+func certPool(t *testing.T, cert tls.Certificate) *x509.CertPool {
+	t.Helper()
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		t.Fatalf("parsing test certificate: %v", err)
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(leaf)
+	return pool
+}

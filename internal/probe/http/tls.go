@@ -2,26 +2,36 @@ package http
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"math"
 	"time"
 
 	"bodsch.me/sentinel/internal/probe"
 )
 
-// inspectTLS performs manual certificate diagnostics on a completed handshake.
+// inspectTLS validates and diagnoses the server certificate on a completed
+// handshake.
 //
-// The probe deliberately dials with InsecureSkipVerify so the handshake does not
-// auto-fail on an expired or hostname-mismatched certificate; this function then
-// classifies the leaf certificate itself. That is what lets Sentinel report
-// certificate_expired distinctly from "unreachable", and compute remaining days
-// even for an already-expired certificate.
+// The probe deliberately dials with InsecureSkipVerify so the handshake never
+// auto-fails; this function then performs verification itself. That is what lets
+// Sentinel report certificate_expired distinctly from "unreachable", compute
+// remaining days even for an already-expired certificate, and — unlike the
+// standard client — still expose diagnostics when a certificate is rejected.
 //
-// 0.1 scope: expiry (NotBefore/NotAfter) and hostname match. Full chain
-// verification, OCSP and SAN detail are 0.2.
+// Verification:
+//   - expiry (NotBefore/NotAfter) and hostname are always checked;
+//   - the certificate chain is verified against roots (nil = system roots),
+//     unless skipVerify is set.
+//
+// skipVerify accepts any certificate: TLSInfo still reports the real validity
+// (so sentinel_tls_certificate_valid stays honest), but the returned reason is
+// ReasonNone so the probe does not fail. Use it only for endpoints whose
+// certificate cannot be verified (e.g. self-signed internal targets).
 //
 // It returns the gathered TLSInfo (never nil when a leaf certificate is present)
-// and a FailureReason: ReasonNone when the certificate is acceptable.
-func inspectTLS(state *tls.ConnectionState, host string, now time.Time) (*TLSInfo, probe.FailureReason) {
+// and a FailureReason: ReasonNone when the certificate is acceptable under the
+// active policy.
+func inspectTLS(state *tls.ConnectionState, host string, now time.Time, roots *x509.CertPool, skipVerify bool) (*TLSInfo, probe.FailureReason) {
 	if state == nil || len(state.PeerCertificates) == 0 {
 		return nil, probe.ReasonTLSError
 	}
@@ -34,20 +44,44 @@ func inspectTLS(state *tls.ConnectionState, host string, now time.Time) (*TLSInf
 		RemainingDays: int(math.Floor(leaf.NotAfter.Sub(now).Hours() / 24)),
 	}
 
+	expired := now.After(leaf.NotAfter)
+	notYetValid := now.Before(leaf.NotBefore)
+	info.HostnameValid = leaf.VerifyHostname(host) == nil
+
+	// Chain trust: verify the leaf against the roots (nil => system roots) using
+	// the presented intermediates. This runs even under skipVerify so the
+	// TLSInfo.Valid diagnostic stays honest — skipVerify only affects whether an
+	// untrusted result fails the probe, not what is reported.
+	intermediates := x509.NewCertPool()
+	for _, c := range state.PeerCertificates[1:] {
+		intermediates.AddCert(c)
+	}
+	_, chainErr := leaf.Verify(x509.VerifyOptions{
+		DNSName:       host,
+		Roots:         roots,
+		Intermediates: intermediates,
+		CurrentTime:   now,
+	})
+	chainTrusted := chainErr == nil
+
+	info.Valid = !expired && !notYetValid && info.HostnameValid && chainTrusted
+
+	// When accepting any certificate, record diagnostics but never fail.
+	if skipVerify {
+		return info, probe.ReasonNone
+	}
+
 	switch {
-	case now.After(leaf.NotAfter):
+	case expired:
 		return info, probe.ReasonCertificateExpired
-	case now.Before(leaf.NotBefore):
-		// Not yet valid — treat as an invalid certificate.
+	case notYetValid:
+		return info, probe.ReasonCertificateInvalid
+	case !info.HostnameValid:
+		return info, probe.ReasonCertificateInvalid
+	case !chainTrusted:
+		// Untrusted / unknown-CA (e.g. a self-signed cert or a MITM): fail unless
+		// the operator opted out via insecure_skip_verify or provided a ca_file.
 		return info, probe.ReasonCertificateInvalid
 	}
-
-	if err := leaf.VerifyHostname(host); err != nil {
-		info.HostnameValid = false
-		return info, probe.ReasonCertificateInvalid
-	}
-	info.HostnameValid = true
-	info.Valid = true
-
 	return info, probe.ReasonNone
 }
