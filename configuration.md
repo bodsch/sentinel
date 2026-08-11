@@ -364,6 +364,73 @@ targets:
 
 ---
 
+### TLS expectations
+
+Beyond verification, a target can declare **operational** expectations about its
+TLS connection. They are entirely opt-in: without a `tls.expect` block nothing
+new can fail a probe, and the certificate diagnostics
+(`metrics.md` → *TLS Metrics*) are exported either way.
+
+```
+targets:
+  - name: homepage
+    http:
+      url: https://example.org
+      tls:
+        expect:
+          min_days_remaining: 21           # renew window, spans the whole chain
+          min_version: "1.3"               # "1.2" or "1.3"
+          require_ocsp_stapling: true      # a stapled response saying "good"
+          issuer_regex: "Let's Encrypt"    # pin the issuing CA
+```
+
+| Field | Effect when breached |
+|---|---|
+| `min_days_remaining` | `reason="certificate_expiring"` |
+| `min_version` | `reason="tls_policy_violation"` |
+| `require_ocsp_stapling` | `reason="tls_policy_violation"` |
+| `issuer_regex` | `reason="tls_policy_violation"` |
+
+- `min_days_remaining` covers the **whole chain**, so an intermediate or root
+  expiring before the leaf trips it too. `certificate_expiring` is deliberately a
+  separate reason from `certificate_expired`: the service still works, and the
+  response is to renew, not to page.
+- `min_version` accepts only `1.2` and `1.3`. A lower bound would be a no-op
+  Sentinel could not honour — the probe transport never offers below TLS 1.2 — and
+  a configuration option that silently does nothing is worse than none.
+- `require_ocsp_stapling` demands a stapled response whose status is `good`. A
+  missing, unparsable, unknown or **revoked** staple is a breach. Note that many
+  large sites do not staple at all (Let's Encrypt retired OCSP entirely), so
+  enable this only where you know the server does.
+- `issuer_regex` is matched against the issuing CA's common name. It makes an
+  unannounced CA migration fail loudly — and with it a certificate swapped by
+  anyone able to obtain one from a different public CA.
+
+**When they are evaluated.** After the handshake succeeds *and* after the response
+validators. The security-critical checks (untrusted chain, expired certificate,
+hostname mismatch) still abort the handshake before any request — and therefore
+any credentials — is sent. A policy breach is a different thing: the connection is
+already cryptographically sound, so aborting it mid-handshake would only discard
+the status code, the phase timings and the very TLS diagnostics needed to judge
+the breach. Running after the validators also keeps a genuine functional failure
+(wrong status, bad body) ranked above a compliance warning.
+
+**Scope.** Like `ca_file` and `insecure_skip_verify`, expectations apply only to
+the target's own origin (scheme + host + port). A redirect to a third-party host
+is never judged against them.
+
+**Mutually exclusive with `insecure_skip_verify`** — expectations describe a
+verified connection, and evaluating them against a certificate nobody vouched for
+would read as a guarantee the configuration cannot give.
+
+Not covered: enumerating a server's *supported* cipher suites. Sentinel offers
+only TLS 1.2+ and Go's secure suites, so a weak suite is never negotiated and a
+`forbid_weak_ciphers` switch would be a no-op. Probing what a server would
+additionally accept needs several deliberately downgraded handshakes and belongs
+to the planned standalone `tls:` probe.
+
+---
+
 ## HTTP Validation
 
 Validators are explicitly defined.
@@ -521,18 +588,29 @@ Planned metrics: packet loss, latency, jitter.
 
 ## TLS Configuration (planned)
 
-> Not implemented as a standalone block. Today TLS is inspected implicitly for
-> HTTPS targets (certificate expiry, hostname, remaining days — see the TLS
-> metrics in `metrics.md`). A standalone `tls:` block is rejected as an unknown
-> field. Planned shape:
+> Not implemented **as a standalone protocol block**. For HTTPS targets TLS is
+> already inspected in depth — chain, negotiated version and cipher, certificate
+> identity, key strength and OCSP stapling (see *TLS verification* and *TLS
+> expectations* above, and `metrics.md` → *TLS Metrics*). What is missing is a
+> `tls:` target type for endpoints that are not HTTP: LDAPS (636), SMTPS (465),
+> MQTT over TLS (8883), or any bare TLS port. A top-level `tls:` block is
+> rejected as an unknown field. Planned shape:
 
 ```
 tls:
-  host: example.org
-  port: 443
-  validate_chain: true
-  minimum_days_remaining: 30
+  host: ldap.example.org
+  port: 636
 ```
+
+It would reuse the existing `internal/tlsdiag` inspection and therefore emit the
+identical `sentinel_tls_*` series — the collector is already
+protocol-independent. Chain validation and a minimum-remaining-days threshold are
+not part of that shape because they exist today as `tls.expect`
+(`min_days_remaining`) rather than as protocol-block options.
+
+That probe is also where enumerating a server's *supported* TLS versions and
+cipher suites belongs: it needs several deliberately downgraded handshakes, which
+a probe that also has to measure request latency must not do.
 
 ---
 

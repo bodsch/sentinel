@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"bodsch.me/sentinel/internal/scheduler"
 	"bodsch.me/sentinel/internal/server"
 	"bodsch.me/sentinel/internal/store"
+	"bodsch.me/sentinel/internal/tlsdiag"
 	"bodsch.me/sentinel/pkg/version"
 )
 
@@ -157,11 +159,14 @@ func serve(cfg options, loaded *config.Config, logger *slog.Logger) int {
 		}
 	}
 
-	// Register collectors: the generic probe collector plus each protocol's own.
+	// Register collectors: the generic probe collector, each protocol's own, and
+	// the protocol-independent TLS collector (which serves every probe whose
+	// diagnostics carry certificate information).
 	reg.MustRegister(metrics.NewProbeCollector(st, sched))
 	reg.MustRegister(httpprobe.NewCollector(st))
 	reg.MustRegister(dnsprobe.NewCollector(st))
 	reg.MustRegister(tcpprobe.NewCollector(st))
+	reg.MustRegister(tlsdiag.NewCollector(st))
 
 	// Expose the process's own runtime health (goroutines, heap, GC, CPU, FDs).
 	metrics.RegisterRuntimeCollectors(reg)
@@ -294,8 +299,49 @@ func httpOptions(target config.Target, caPools map[string]*x509.CertPool) (httpp
 			}
 			opts.TLSRoots = pool
 		}
+		policy, err := tlsPolicy(h.TLS.Expect)
+		if err != nil {
+			return opts, fmt.Errorf("http target %q: %w", target.Name, err)
+		}
+		opts.TLSPolicy = policy
 	}
 	return opts, nil
+}
+
+// tlsPolicy maps a target's configured TLS expectations to a prober policy.
+//
+// Parameters:
+//   - e: the target's expectations; nil means no policy.
+//
+// It returns nil when nothing is to be enforced, and an error when a value could
+// not be interpreted. Configuration validation already rejects those, so an
+// error here is defensive.
+func tlsPolicy(e *config.TLSExpect) (*tlsdiag.Policy, error) {
+	if e == nil {
+		return nil, nil
+	}
+	policy := &tlsdiag.Policy{
+		MinDaysRemaining:    e.MinDaysRemaining,
+		RequireOCSPStapling: e.RequireOCSPStapling,
+	}
+	if v := strings.TrimSpace(e.MinVersion); v != "" {
+		version, err := tlsdiag.ParseVersion(v)
+		if err != nil {
+			return nil, fmt.Errorf("tls.expect.min_version: %w", err)
+		}
+		policy.MinVersion = version
+	}
+	if r := strings.TrimSpace(e.IssuerRegex); r != "" {
+		re, err := regexp.Compile(r)
+		if err != nil {
+			return nil, fmt.Errorf("tls.expect.issuer_regex %q: %w", r, err)
+		}
+		policy.IssuerRegex = re
+	}
+	if policy.Empty() {
+		return nil, nil
+	}
+	return policy, nil
 }
 
 // loadCAPool returns the certificate pool for the PEM bundle at path, reading and

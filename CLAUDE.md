@@ -18,7 +18,9 @@ er langsam/nicht erreichbar?" — über phasengenaue Diagnostik (DNS/TCP/TLS/TTF
 - DNS-Probe (A/AAAA/MX/TXT) und TCP-Probe (Connect + optionale Banner-Validierung)
 - Response-Validierung (Status-Code, Body-Regex, Header, JSONPath)
 - Redirect-Handling inkl. Loop- und HTTPS→HTTP-Downgrade-Erkennung
-- TLS-Diagnostik (Ablauf, Hostname, verbleibende Tage)
+- TLS-Diagnostik über die gesamte Zertifikatskette (früheste Ablaufzeit, Kettenlänge/Trust,
+  ausgehandelte Version und Cipher-Suite, Zertifikatsidentität, Schlüsselstärke, OCSP-Stapling)
+  plus optionale Per-Target-Erwartungen (`http.tls.expect`)
 - Latenz-Histogramme (zur Probe-Zeit gefüttert) plus Per-Phase-Gauges und `go_*`/`process_*`-Metriken
 - Prometheus-Metriken über `/metrics`, Health-/Ready-Checks (`/healthz`, `/readyz`)
 
@@ -162,6 +164,7 @@ Der Agent soll:
 │   ├── validator         # Validator interface + status/regex/header/jsonpath
 │   ├── scheduler         # ticker-per-target + semaphore + skip-if-running
 │   ├── store             # thread-safe result store (name = primary key)
+│   ├── tlsdiag           # protocol-independent TLS inspection, policy + sentinel_tls_* collector
 │   ├── metrics           # self-registering collectors, registry, build_info
 │   ├── server            # /metrics, /healthz, /readyz
 │   ├── logging           # slog setup, field conventions

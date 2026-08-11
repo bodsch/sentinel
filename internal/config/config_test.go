@@ -407,6 +407,33 @@ func TestValidationErrors(t *testing.T) {
 			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n      tls:\n        insecure_skip_verify: true\n        ca_file: /etc/ca.pem\n",
 			wantSub: "mutually exclusive",
 		},
+		{
+			// Expectations describe a verified connection; combined with
+			// skip-verify they would promise something the config cannot give.
+			name:    "tls expect with insecure_skip_verify",
+			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n      tls:\n        insecure_skip_verify: true\n        expect:\n          min_days_remaining: 30\n",
+			wantSub: "cannot be combined with http.tls.insecure_skip_verify",
+		},
+		{
+			name:    "tls expect negative min_days_remaining",
+			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n      tls:\n        expect:\n          min_days_remaining: -1\n",
+			wantSub: "min_days_remaining must not be negative",
+		},
+		{
+			name:    "tls expect unsupported min_version",
+			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n      tls:\n        expect:\n          min_version: \"1.1\"\n",
+			wantSub: "unsupported TLS version",
+		},
+		{
+			name:    "tls expect invalid issuer_regex",
+			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n      tls:\n        expect:\n          issuer_regex: \"[\"\n",
+			wantSub: "is not a valid regular expression",
+		},
+		{
+			name:    "tls expect unknown field",
+			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n      tls:\n        expect:\n          forbid_weak_ciphers: true\n",
+			wantSub: "forbid_weak_ciphers",
+		},
 	}
 
 	for _, tc := range tests {
@@ -494,5 +521,64 @@ func TestLoadMissingFile(t *testing.T) {
 	_, err := Load(filepath.Join(t.TempDir(), "does-not-exist.yaml"))
 	if err == nil {
 		t.Fatal("expected error for missing file, got nil")
+	}
+}
+
+// TestTLSExpectParsed asserts a complete, valid tls.expect block round-trips
+// through parsing and validation with every field preserved.
+func TestTLSExpectParsed(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseResolve(t, `
+targets:
+  - name: homepage
+    http:
+      url: https://a.example
+      tls:
+        ca_file: /etc/sentinel/ca.pem
+        expect:
+          min_days_remaining: 21
+          min_version: "1.3"
+          require_ocsp_stapling: true
+          issuer_regex: "Let's Encrypt"
+`)
+	if err != nil {
+		t.Fatalf("valid tls.expect rejected: %v", err)
+	}
+
+	e := cfg.Targets[0].HTTP.TLS.Expect
+	if e == nil {
+		t.Fatal("tls.expect not parsed")
+	}
+	if e.MinDaysRemaining != 21 {
+		t.Errorf("min_days_remaining = %d, want 21", e.MinDaysRemaining)
+	}
+	if e.MinVersion != "1.3" {
+		t.Errorf("min_version = %q, want 1.3", e.MinVersion)
+	}
+	if !e.RequireOCSPStapling {
+		t.Error("require_ocsp_stapling not parsed")
+	}
+	if e.IssuerRegex != "Let's Encrypt" {
+		t.Errorf("issuer_regex = %q, unexpected", e.IssuerRegex)
+	}
+}
+
+// TestTLSWithoutExpectStaysNil guards the promise that a target without the
+// block enforces nothing new.
+func TestTLSWithoutExpectStaysNil(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseResolve(t, `
+targets:
+  - name: homepage
+    http:
+      url: https://a.example
+`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if tlsCfg := cfg.Targets[0].HTTP.TLS; tlsCfg != nil && tlsCfg.Expect != nil {
+		t.Errorf("tls.expect = %+v, want nil without a tls block", tlsCfg.Expect)
 	}
 }

@@ -197,7 +197,7 @@ Labels:
 reason
 ```
 
-Possible values (0.1 set):
+Possible values:
 
 ```
 dns_error
@@ -211,6 +211,10 @@ tls_error
 certificate_expired
 
 certificate_invalid
+
+certificate_expiring
+
+tls_policy_violation
 
 redirect_loop
 
@@ -229,6 +233,12 @@ network_error
 
 `network_error` is the catch-all for network-level failures that do not match a
 more specific reason, so an unusual error is never silently misclassified.
+
+`certificate_expiring` and `tls_policy_violation` occur **only** for targets that
+opted in via `tls.expect` (see `configuration.md` → *TLS expectations*). They
+describe a connection that was cryptographically sound but breached a declared
+operational requirement, which is why they rank below a functional failure: a
+wrong status code or a failed body check is reported instead.
 
 Example:
 
@@ -355,6 +365,19 @@ Type: `Gauge`. The number of redirects followed on the last probe.
 
 ---
 
+### TLS in use
+
+```
+sentinel_http_ssl
+```
+
+Type: `Gauge`. `1` when the final hop was served over TLS, else `0`. Unlike the
+`sentinel_tls_*` series this is reported for plain HTTP too, so a target that
+silently stops using TLS shows up as a `1 -> 0` transition rather than as a gap.
+Equivalent to the blackbox_exporter's `probe_http_ssl`.
+
+---
+
 ### Redirect loop / limit (failure reasons, not metrics)
 
 Redirect loops and exceeding the redirect limit are **not** separate metrics.
@@ -381,23 +404,30 @@ Instead:
 
 ## TLS Metrics
 
-### Certificate Expiration
+Every `sentinel_tls_*` series carries the standard label set and is emitted by
+one protocol-independent collector (`internal/tlsdiag`), not by the HTTP
+collector. Any probe whose diagnostics carry certificate information produces the
+full set, which is what will let a future standalone `tls:` probe or a
+TLS-enabled TCP probe reuse these series unchanged.
 
-Unix timestamp:
+**Vanishing semantics.** A target that did not negotiate TLS emits **no**
+`sentinel_tls_*` series at all — not zeros. A zero here always means a real
+measurement ("the certificate is invalid"), never "there was nothing to measure".
+Use `sentinel_http_ssl` to tell a plain-HTTP target apart from one that failed
+before the handshake.
+
+### Leaf certificate
 
 ```
-sentinel_tls_certificate_expiry_timestamp_seconds
+sentinel_tls_certificate_expiry_timestamp_seconds      # NotAfter, unix seconds
+sentinel_tls_certificate_not_before_timestamp_seconds  # NotBefore, unix seconds
+sentinel_tls_certificate_remaining_days                # whole days, negative if expired
+sentinel_tls_certificate_valid                         # 1 = valid, 0 = invalid
+sentinel_tls_certificate_self_signed                   # 1 = issuer equals subject
+sentinel_tls_certificate_key_bits                      # RSA modulus / EC curve size
+sentinel_tls_certificate_san_count                     # number of subject alternative names
 ```
 
----
-
-### Certificate Remaining Days
-
-Convenience metric:
-
-```
-sentinel_tls_certificate_remaining_days
-```
 Example:
 
 ```
@@ -406,27 +436,129 @@ sentinel_tls_certificate_remaining_days{
 } 42
 ```
 
----
-
-### Certificate Validation
-
-```
-sentinel_tls_certificate_valid
-```
-
-Values:
-
-```
-1 = valid (chain trusted, hostname matches, not expired)
-
-0 = invalid
-```
-
-`1` requires the certificate chain to verify against the trusted roots (system
-roots, or a target's `tls.ca_file`), the hostname to match, and the validity
-window to be current. It stays honest even when a target sets
+`sentinel_tls_certificate_valid` requires the chain to verify against the trusted
+roots (system roots, or a target's `tls.ca_file`), the hostname to match, and the
+validity window to be current. It stays honest even when a target sets
 `tls.insecure_skip_verify` — an accepted-but-untrusted certificate reports `0`
 here while the probe still succeeds, so you can alert on `== 0` regardless.
+
+`sentinel_tls_certificate_key_bits` is `0` for a key type Sentinel does not
+recognise, which is distinguishable from a genuinely small key.
+
+---
+
+### Certificate chain
+
+```
+sentinel_tls_chain_earliest_expiry_timestamp_seconds  # earliest NotAfter in the chain
+sentinel_tls_chain_earliest_remaining_days            # whole days, negative if expired
+sentinel_tls_chain_length                             # certificates in the evaluated chain
+sentinel_tls_chain_verified                           # 1 = verified against the trust roots
+```
+
+**Alert on the chain, not on the leaf.** An intermediate — or the root — expiring
+before the leaf breaks the connection just as surely, and is invisible in
+`sentinel_tls_certificate_remaining_days`.
+
+`sentinel_tls_chain_earliest_*` is the earliest expiry across **both** the
+verified chain and everything the server presented on the wire. Either set alone
+can miss a real outage: a superfluous cross-signed intermediate that Go routes
+around still breaks clients whose trust store needs it, and the root — which
+never appears on the wire — breaks everyone when it lapses.
+
+`sentinel_tls_chain_length` counts the chain a client would actually build (leaf
++ intermediates + root, so typically 3), which is why it can exceed the number of
+certificates the server sent. When verification fails there is no such chain, and
+the count falls back to what the server presented — the diagnostics have to stay
+usable precisely in the failure case.
+
+---
+
+### Negotiated connection
+
+```
+sentinel_tls_version_info{version="TLS 1.3"}                  # always 1
+sentinel_tls_cipher_info{cipher="TLS_AES_128_GCM_SHA256"}      # always 1
+```
+
+Both describe what was **negotiated**, not what the server additionally supports:
+Sentinel offers only TLS 1.2+ and Go's secure cipher suites, so a weak suite can
+never be agreed. Enumerating a server's *supported* suites needs several
+deliberately downgraded handshakes and is a job for the planned standalone `tls:`
+probe.
+
+---
+
+### Certificate identity
+
+```
+sentinel_tls_certificate_info{
+    subject_cn="example.org",
+    issuer_cn="Let's Encrypt R3",
+    serial="080662878915b42a0e4dc61a4daedfea",
+    fingerprint_sha256="7310e16f…",
+    signature_algorithm="SHA256-RSA",
+    public_key_algorithm="ECDSA"
+} 1
+```
+
+The value is always `1`; the labels carry the data. `serial` and
+`fingerprint_sha256` are byte-wise lowercase hex, matching what `openssl`,
+browsers and certificate transparency logs display — a leading zero byte is
+preserved so the value can be pasted into a search.
+
+`signature_algorithm` is worth an alert of its own: a lingering `SHA1-RSA` is a
+finding regardless of expiry.
+
+**The subject alternative names are deliberately not a label.** A
+shared-hosting or CDN certificate can carry hundreds, which would make a single
+label value kilobytes long and breach the bounded-cardinality rule the whole
+metric set follows. Their number is exported as
+`sentinel_tls_certificate_san_count`; the names themselves stay in the
+diagnostics (and will be served by the planned debug API).
+
+---
+
+### OCSP stapling
+
+```
+sentinel_tls_ocsp_stapled                              # 1 = the server stapled a response
+sentinel_tls_ocsp_info{status="good|revoked|unknown|invalid"}   # only when stapled
+sentinel_tls_ocsp_next_update_timestamp_seconds        # when the staple goes stale
+```
+
+Sentinel evaluates only what the server staples to the handshake and never
+contacts an OCSP responder itself. That keeps a probe to exactly one network
+conversation: a responder request would add its own latency to the measurement,
+turn a responder outage into an apparent target failure, and disclose the
+monitored host list to the CA.
+
+The staple is verified, not trusted: it must be signed by the certificate's
+issuer and refer to that very certificate. A staple failing either check reports
+`status="invalid"` rather than being discarded — a broken staple is itself a
+finding.
+
+Note that `status="revoked"` does **not** fail the probe on its own. Set
+`tls.expect.require_ocsp_stapling` to make it fail, or alert on the series (see
+*Alerting Examples*).
+
+---
+
+### Comparison with the blackbox_exporter
+
+| blackbox_exporter | Sentinel |
+|---|---|
+| `probe_ssl_earliest_cert_expiry` | `sentinel_tls_chain_earliest_expiry_timestamp_seconds` (never later; also covers the root) |
+| `probe_ssl_last_chain_expiry_timestamp_seconds` | `sentinel_tls_certificate_expiry_timestamp_seconds` (the leaf, which is what the last chain's expiry tracks) |
+| `probe_ssl_last_chain_info{fingerprint_sha256,subject,issuer,subjectalternative}` | `sentinel_tls_certificate_info{…}` + `sentinel_tls_certificate_san_count` (SANs counted, not labelled) |
+| `probe_tls_version_info{version}` | `sentinel_tls_version_info{version}` |
+| `probe_http_ssl` | `sentinel_http_ssl` |
+| — | `sentinel_tls_cipher_info`, `_certificate_not_before_timestamp_seconds`, `_certificate_self_signed`, `_certificate_key_bits`, `_chain_length`, `_chain_verified`, `_ocsp_*` |
+
+Verified against `blackbox_exporter 0.28.0`: for the same certificate,
+`sentinel_tls_chain_earliest_expiry_timestamp_seconds` and
+`probe_ssl_earliest_cert_expiry` agree to the second, and the serial and SHA-256
+fingerprint match byte for byte.
 
 ---
 
@@ -544,22 +676,48 @@ max_over_time(sentinel_scrape_duration_seconds[1h])  # recent worst-case render 
 
 Metrics are rendered live on every scrape: each collector walks the result store
 and emits a fresh series per target. The cost is therefore **O(N)** in the number
-of targets — an HTTP target emits ~10 scrape-time state series (success,
-last-success, DNS/TCP/TLS/download timings, status, redirects, TLS diagnostics).
-The latency histograms (`probe_duration`, `http_ttfb`) are separate: they are fed
-at probe time and each expands to `buckets + 2` series.
+of targets. Measured per target (single scrape, `grep -c` on `/metrics`):
 
-Measured cost (18-core arm64; see `docs/benchmark-vs-blackbox.md`):
+| Target | Scrape-time state series | of which `sentinel_tls_*` |
+|---|---|---|
+| plain HTTP | 10 | 0 |
+| **HTTPS** | **25** | **15** |
+| HTTPS with OCSP stapling | 27 | 17 |
+
+The latency histograms (`probe_duration`, `http_ttfb`) are separate: they are fed
+at probe time and each expands to `buckets + 2` series, independent of the
+protocol.
+
+Measured end-to-end cost for plain HTTP targets (18-core arm64; see
+`docs/benchmark-vs-blackbox.md`):
 
 | Targets | Gather (render) — `sentinel_scrape_duration_seconds` | Full `/metrics` serve — Prometheus `scrape_duration_seconds` |
 |---|---|---|
 | 1 000  | ~9 ms   | ~20 ms  |
 | 10 000 | ~120 ms | ~260 ms |
 
-So the render itself is roughly **~12 µs per HTTP target**, and the full serve
-(render + encode + network) about twice that. Most of the cost is the Prometheus
-client library constructing and encoding the series (not Sentinel logic), so it
-is inherent to producing N series rather than something a code change removes.
+So the render is roughly **~12 µs per plain HTTP target**, and the full serve
+(render + encode + network) about twice that.
+
+**HTTPS targets cost noticeably more, because of the certificate series.**
+Per-collector render cost (`go test -bench` in `internal/tlsdiag` and
+`internal/probe/http`):
+
+| Collector | per target, per scrape |
+|---|---|
+| HTTP (timings, status, redirects, `http_ssl`) | ~4.4 µs |
+| TLS (certificate, chain, version/cipher, OCSP) | ~12.4 µs |
+
+At 10 000 HTTPS targets the TLS series alone account for ~165 ms of render time.
+Most of that is the Prometheus client library constructing and encoding series
+(not Sentinel logic), so it is inherent to producing 15 more series per target
+rather than something a code change removes. If it ever outweighs the value of the
+diagnostics, the lever is fewer targets per Sentinel instance — not fewer series,
+which are what the component exists to provide.
+
+The *probe-time* cost of the inspection is negligible by comparison: ~69 µs per
+handshake, or ~106 µs when an OCSP staple has to be parsed and its signature
+verified — against a network handshake measured in tens of milliseconds.
 
 ### Sizing `scrape_timeout`
 
@@ -724,9 +882,70 @@ histogram_quantile(
 
 ### Certificate Expiring
 
+Alert on the chain, not the leaf — an intermediate or root expiring first is
+invisible in the leaf-only series:
+
 ```
-sentinel_tls_certificate_remaining_days < 14
+sentinel_tls_chain_earliest_remaining_days < 14
 ```
+
+---
+
+### Certificate Revoked
+
+`status="revoked"` does not fail a probe by itself (only
+`tls.expect.require_ocsp_stapling` makes it), so alert on it explicitly:
+
+```
+sentinel_tls_ocsp_info{status="revoked"} == 1
+```
+
+---
+
+### Stale OCSP staple
+
+A staple past its `NextUpdate` may be rejected by browsers while Sentinel's own
+probe still succeeds:
+
+```
+sentinel_tls_ocsp_next_update_timestamp_seconds - time() < 0
+```
+
+---
+
+### Weak certificate
+
+```
+sentinel_tls_certificate_key_bits < 2048
+  and sentinel_tls_certificate_info{public_key_algorithm="RSA"} == 1
+```
+
+```
+sentinel_tls_certificate_info{signature_algorithm=~"SHA1.*"} == 1
+```
+
+---
+
+### TLS silently dropped
+
+A target that stops serving HTTPS shows as a `1 -> 0` transition:
+
+```
+sentinel_http_ssl == 0 and sentinel_http_ssl offset 1h == 1
+```
+
+---
+
+### Unannounced CA change
+
+```
+changes(
+  count by (target) (sentinel_tls_certificate_info)[7d:1h]
+) > 0
+```
+
+For a hard guarantee, pin the issuer with `tls.expect.issuer_regex` instead — a
+breach then fails the probe with `reason="tls_policy_violation"`.
 
 ---
 

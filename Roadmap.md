@@ -50,7 +50,9 @@ deliberately narrow vertical slice — one protocol done end-to-end, not several
 - status code / body regex / header validators (via a `Validator` interface)
 - `max_body_bytes` cap (default 1 MB)
 - redirect handling: follow up to `max_redirects`, loop detection, HTTPS→HTTP downgrade detection
-- TLS diagnostics: expiry, hostname match, remaining days (manual certificate inspection)
+- TLS diagnostics: expiry, hostname match, remaining days (manual certificate
+  inspection); extended in 0.2 to the full chain, negotiated version/cipher,
+  certificate identity and OCSP stapling — see *TLS Improvements* below
 - HTTP timing instrumentation via `net/http/httptrace`
 
 Metrics:
@@ -199,13 +201,57 @@ Planned:
   (accept any cert; validity still reported honestly). Closed a MITM
   credential-leak found in the security audit. See `configuration.md` → *TLS
   verification*.
+- ~~full chain diagnostics~~ **(implemented)**: the TLS inspection moved out of
+  the HTTP package into `internal/tlsdiag`, which now reports the whole chain
+  (`sentinel_tls_chain_earliest_expiry_timestamp_seconds`, `_earliest_remaining_days`,
+  `_length`, `_verified`), the negotiated version and cipher
+  (`sentinel_tls_version_info`, `sentinel_tls_cipher_info`), certificate identity
+  and strength (`sentinel_tls_certificate_info`, `_key_bits`, `_san_count`,
+  `_not_before_timestamp_seconds`, `_self_signed`) and `sentinel_http_ssl`.
+  Motivation: the leaf-only metrics could not see an intermediate or root expiring
+  before the leaf — an outage that arrives with no warning. The collector is
+  protocol-independent, so a future `tls:` or TLS-enabled `tcp` probe gains the
+  whole set for free. Verified against `blackbox_exporter 0.28.0`: for the same
+  certificate the earliest-expiry values agree to the second, and serial and
+  SHA-256 fingerprint match byte for byte.
+- ~~OCSP validation~~ **(implemented, stapling only)**: the response the server
+  staples is parsed and *verified* (signed by the certificate's issuer, referring
+  to that certificate), reported via `sentinel_tls_ocsp_stapled`,
+  `sentinel_tls_ocsp_info{status}` and `_next_update_timestamp_seconds`. Sentinel
+  deliberately does **not** query an OCSP responder itself: that would add the
+  responder's latency to the measurement, turn a responder outage into an apparent
+  target failure, and disclose the monitored host list to the CA. Active querying
+  stays open as a per-target opt-in if a concrete need appears.
+- ~~certificate expiration alerts~~ **(implemented)**: opt-in
+  `tls.expect.min_days_remaining` spanning the whole chain, with its own failure
+  reason `certificate_expiring` (distinct from `certificate_expired`: the service
+  still works, the response is to renew). Ready-made alerting rules are in
+  `metrics.md` → *Alerting Examples*.
+- ~~certificate SAN validation~~ **(implemented, reshaped)**: hostname matching
+  against the SANs was always enforced; what was missing was visibility. The SAN
+  *count* is now exported (`sentinel_tls_certificate_san_count`) and the names are
+  kept in the diagnostics. The names are deliberately **not** a metric label — a
+  CDN certificate carries hundreds, which would make one label value kilobytes
+  long. The blackbox_exporter's `subjectalternative` label is the thing being
+  declined here, on purpose.
+- ~~weak cipher detection~~ **(partly implemented, partly reassigned)**: the
+  *negotiated* suite and version are exported, and `tls.expect.min_version`
+  enforces a floor. Detecting what a server *additionally* supports is not
+  possible from a single handshake — Sentinel only ever offers TLS 1.2+ and Go's
+  secure suites, so a weak suite is never agreed and a `forbid_weak_ciphers`
+  switch would be a no-op. That enumeration needs several deliberately downgraded
+  handshakes and is reassigned to the standalone `tls:` probe below.
 
 Planned:
 
-- OCSP validation
-- certificate SAN validation
-- certificate expiration alerts
-- weak cipher detection
+- standalone `tls:` probe for non-HTTP endpoints (LDAPS, SMTPS, MQTT, any bare TLS
+  port), reusing `internal/tlsdiag`; also the right home for supported-version and
+  supported-cipher enumeration
+- client certificates (mTLS), explicit SNI `server_name`, per-target
+  `min_version`/`max_version` on the connection itself
+- active OCSP / CRL revocation checking as a per-target opt-in
+- ALPN reporting (needs HTTP/2 support in the probe transport first; without it
+  no protocol is negotiated and the metric would be constantly empty)
 
 ---
 
@@ -251,6 +297,13 @@ Implemented:
   golangci-lint, govulncheck, `go test -race`, build) on push/PR, and **Release**
   (cross-compiled `linux/darwin × amd64/arm64` static binaries + `SHA256SUMS`) on
   a `v*` tag. See `README.md` → *Continuous Integration*.
+
+Known govulncheck output: adding `golang.org/x/crypto` (for `ocsp`, the only
+non-stdlib dependency of the TLS work) surfaces the module-level advisory
+**GO-2026-5932** — the unmaintained `x/crypto/openpgp` package. Sentinel does not
+import it, the symbol-level scan reports zero vulnerabilities, and the advisory
+has no fixed version because the package is unmaintained by design. `make vuln`
+therefore still passes; the line in its output is expected, not a regression.
 
 Planned:
 

@@ -228,6 +228,25 @@ hops to a different origin fall back to the system roots and cannot be downgrade
 The chain is still inspected under `insecure_skip_verify`, so
 `sentinel_tls_certificate_valid` stays honest while the probe accepts the cert.
 
+The inspection itself lives in `internal/tlsdiag`, not in the HTTP package. TLS is
+not an HTTP concern — the exported series are named `sentinel_tls_*`, not
+`sentinel_http_tls_*` — and a future standalone `tls:` probe or a TLS-enabled TCP
+probe must reuse the same inspection *and* the same metric series. Protocol
+packages attach a `*tlsdiag.Info` to their diagnostics and implement
+`tlsdiag.Provider` (a single method); the collector there then emits the whole
+`sentinel_tls_*` set for them, filtering on that interface rather than on a probe
+type. The stapled OCSP response is read from the same `ConnectionState`, so the
+full certificate picture costs no extra network round trip.
+
+**Operational TLS expectations run after the handshake, not inside it.** The
+security-critical checks (untrusted, expired, wrong host) stay in
+`VerifyConnection` for the credential-leak reason above. An opt-in `tls.expect`
+policy is a different category: the connection is already cryptographically
+sound, so aborting it mid-handshake would discard the status code, the phase
+timings and the very TLS diagnostics an operator needs to judge the breach.
+Policies are therefore evaluated after the response validators, which also ranks
+a genuine functional failure above a compliance warning.
+
 ---
 
 ## HTTP Timing Model

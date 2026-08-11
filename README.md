@@ -26,7 +26,10 @@ already ships:
 
 - **HTTP/HTTPS** probes with full phase timing (methods GET/HEAD/POST/PUT/PATCH/DELETE, request body,
   custom headers, Basic/Bearer auth, per-target body-size cap, redirect handling, TLS chain
-  verification by default + diagnostics)
+  verification by default)
+- **TLS diagnostics** across the whole certificate chain: earliest expiry, chain length and trust,
+  negotiated version and cipher, certificate identity and key strength, OCSP stapling, plus opt-in
+  per-target expectations (`http.tls.expect`)
 - a **DNS** probe (A/AAAA/MX/TXT) and a **TCP** probe (connection check + optional banner validation)
 - response validators: status, body regex, header match, and **JSONPath** (`expect.json`)
 - latency **histograms** fed at probe time, plus per-phase gauges and `go_*`/`process_*` runtime metrics
@@ -123,9 +126,18 @@ Supported features:
 - TLS certificate verification against system roots **by default** (untrusted,
   expired or wrong-host certs fail the probe), with per-target opt-out
   (`http.tls.insecure_skip_verify`) or a custom CA (`http.tls.ca_file`)
-- TLS certificate diagnostics (expiry, hostname, remaining days)
+- TLS diagnostics for the whole **chain**, not just the leaf: earliest expiry
+  across chain and presented certificates (an intermediate or root expiring first
+  is otherwise invisible), chain length and trust status, negotiated version and
+  cipher suite, certificate identity (subject, issuer, serial, SHA-256
+  fingerprint, signature and key algorithm, key bits, SAN count), self-signed
+  detection, and verified **OCSP stapling** (no request to the CA)
+- opt-in TLS expectations per target (`http.tls.expect`): minimum remaining days
+  across the chain, minimum TLS version, required OCSP stapling, issuer pinning —
+  each with its own failure reason
 
-Planned: HTTP/2 tuning, HTTP/3, XPath validation, compression analysis.
+Planned: HTTP/2 tuning, HTTP/3, XPath validation, compression analysis,
+standalone `tls:` probe for non-HTTP endpoints.
 
 Measured phases:
 
@@ -206,9 +218,10 @@ sentinel_http_ttfb_seconds            # histogram (_bucket/_sum/_count)
 sentinel_http_download_duration_seconds
 ```
 
-See `metrics.md` for the full metric catalogue (probe state, TLS certificate,
-DNS, TCP, `sentinel_scrape_duration_seconds`, `sentinel_build_info`, and the
-`go_*`/`process_*` runtime collectors).
+See `metrics.md` for the full metric catalogue (probe state, the `sentinel_tls_*`
+certificate/chain/OCSP set, DNS, TCP, `sentinel_scrape_duration_seconds`,
+`sentinel_build_info`, and the `go_*`/`process_*` runtime collectors). That
+chapter also maps every blackbox_exporter TLS series to its Sentinel counterpart.
 
 ---
 
