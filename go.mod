@@ -5,6 +5,7 @@ go 1.26
 require (
 	github.com/miekg/dns v1.1.72
 	github.com/ohler55/ojg v1.28.3
+	golang.org/x/crypto v0.55.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 

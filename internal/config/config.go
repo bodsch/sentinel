@@ -143,6 +143,33 @@ type TLSConfig struct {
 	// CAFile is a PEM bundle to verify the chain against instead of the system
 	// roots (the secure way to monitor an internal-CA endpoint).
 	CAFile string `yaml:"ca_file"`
+	// Expect declares opt-in TLS expectations. When nil (the default) nothing
+	// beyond the standard certificate verification is enforced.
+	Expect *TLSExpect `yaml:"expect"`
+}
+
+// TLSExpect declares operational expectations for a target's TLS connection.
+// They are evaluated after a successful handshake and after the response
+// validators: the connection is already known to be cryptographically sound, so
+// a violation reports a policy problem rather than a broken service.
+//
+// Every field is optional; a zero field disables its check.
+type TLSExpect struct {
+	// MinDaysRemaining is the minimum number of whole days the certificate must
+	// stay valid. The check spans the whole chain, so an intermediate expiring
+	// before the leaf trips it too. A violation yields the failure reason
+	// certificate_expiring.
+	MinDaysRemaining int `yaml:"min_days_remaining"`
+	// MinVersion is the lowest acceptable negotiated TLS version, "1.2" or
+	// "1.3".
+	MinVersion string `yaml:"min_version"`
+	// RequireOCSPStapling demands a stapled OCSP response whose status is
+	// "good". A missing, stale, unparsable, unknown or revoked staple is a
+	// violation.
+	RequireOCSPStapling bool `yaml:"require_ocsp_stapling"`
+	// IssuerRegex must match the issuing CA's common name. It pins the issuer,
+	// making an unannounced CA change visible.
+	IssuerRegex string `yaml:"issuer_regex"`
 }
 
 // BasicAuth holds HTTP Basic credentials. The password may be empty; the username

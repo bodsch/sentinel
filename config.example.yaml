@@ -122,6 +122,33 @@ targets:
       expect:
         status: 200
 
+  # Opt-in TLS expectations. Without a tls.expect block nothing new can fail a
+  # probe — the certificate metrics are exported either way. Each field here has
+  # its own failure reason: min_days_remaining -> certificate_expiring, the rest
+  # -> tls_policy_violation. They are evaluated after the handshake and after the
+  # response validators, so a policy breach never hides a real functional error.
+  # Mutually exclusive with insecure_skip_verify.
+  - name: public-site-with-policy
+    interval: 1m
+    tags:
+      service: web
+      environment: production
+    http:
+      url: https://www.example.org/
+      tls:
+        expect:
+          # Whole days the certificate must stay valid. Spans the entire chain,
+          # so an intermediate or root expiring before the leaf trips it too.
+          min_days_remaining: 21
+          # Lowest acceptable negotiated version: "1.2" or "1.3".
+          min_version: "1.3"
+          # Require a stapled OCSP response whose status is "good". Many large
+          # sites do not staple at all (Let's Encrypt retired OCSP), so enable
+          # this only where you know the server does.
+          require_ocsp_stapling: true
+          # Pin the issuing CA by common name: an unannounced CA change fails.
+          issuer_regex: "Let's Encrypt"
+
   # Self-signed appliance you cannot otherwise verify: accept any certificate.
   # sentinel_tls_certificate_valid still reports the real (untrusted) validity,
   # so you can alert on it while the probe keeps succeeding. Mutually exclusive

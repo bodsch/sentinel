@@ -28,6 +28,7 @@ import (
 	"github.com/ohler55/ojg/jp"
 
 	"bodsch.me/sentinel/internal/probe"
+	"bodsch.me/sentinel/internal/tlsdiag"
 	"bodsch.me/sentinel/internal/validator"
 	"bodsch.me/sentinel/pkg/version"
 )
@@ -86,6 +87,10 @@ type Options struct {
 	// TLSRoots is the certificate pool the chain is verified against. Nil means
 	// the system roots (the default). Ignored when TLSSkipVerify is set.
 	TLSRoots *x509.CertPool
+	// TLSPolicy holds the target's opt-in TLS expectations (minimum remaining
+	// days, minimum version, OCSP stapling, issuer). Nil or empty enforces
+	// nothing, which is the default.
+	TLSPolicy *tlsdiag.Policy
 }
 
 // JSONCheck is one JSONPath assertion (raw path plus an optional expected scalar
@@ -110,9 +115,10 @@ type Prober struct {
 	basicPass       string
 	bearerToken     string
 	body            string
-	tlsSkipVerify   bool           // operator's opt-out; applied to the target's own origin only
-	tlsRoots        *x509.CertPool // operator's CA (nil = system); applied to the target's origin only
-	origin          string         // canonical scheme://host:port of the target URL
+	tlsSkipVerify   bool            // operator's opt-out; applied to the target's own origin only
+	tlsRoots        *x509.CertPool  // operator's CA (nil = system); applied to the target's origin only
+	tlsPolicy       *tlsdiag.Policy // opt-in expectations; applied to the target's origin only
+	origin          string          // canonical scheme://host:port of the target URL
 	validators      []validator.Validator
 	transport       *http.Transport
 
@@ -123,7 +129,7 @@ type Prober struct {
 	tlsHost       string
 	hopRoots      *x509.CertPool
 	hopSkipVerify bool
-	tlsInfo       *TLSInfo
+	tlsInfo       *tlsdiag.Info
 	tlsReason     probe.FailureReason
 }
 
@@ -159,6 +165,7 @@ func New(opts Options) (*Prober, error) {
 		body:            opts.Body,
 		tlsSkipVerify:   opts.TLSSkipVerify,
 		tlsRoots:        opts.TLSRoots,
+		tlsPolicy:       opts.TLSPolicy,
 		origin:          originKey(opts.URL),
 		validators:      validators,
 	}
@@ -175,7 +182,7 @@ func New(opts Options) (*Prober, error) {
 // certificate is unacceptable and the operator has not opted out. Because it can
 // abort before application data, credentials never reach an untrusted server.
 func (p *Prober) verifyConnection(cs tls.ConnectionState) error {
-	info, reason := inspectTLS(&cs, p.tlsHost, time.Now(), p.hopRoots, p.hopSkipVerify)
+	info, reason := tlsdiag.Inspect(&cs, p.tlsHost, time.Now(), p.hopRoots, p.hopSkipVerify)
 	p.tlsInfo = info
 	p.tlsReason = reason
 	if reason != probe.ReasonNone {
@@ -442,6 +449,24 @@ func (p *Prober) run(ctx context.Context) (*Diagnostics, probe.Timings, probe.Fa
 		for _, v := range p.validators {
 			if out := v.Validate(vr); !out.OK {
 				return diag, timings, out.Reason
+			}
+		}
+
+		// The opt-in TLS policy is evaluated last, and only for the target's own
+		// origin (a redirect to a third party is not what the operator declared
+		// expectations about).
+		//
+		// It runs here rather than in verifyConnection for two reasons. The
+		// connection is already cryptographically sound — the security-critical
+		// checks aborted the handshake long before this point — so a policy
+		// breach is an operational finding, not a reason to refuse to talk.
+		// Aborting mid-handshake would also discard the status code, the phase
+		// timings and the very TLS diagnostics an operator needs to judge the
+		// breach. Running after the validators keeps a genuine functional
+		// failure (wrong status, bad body) ranked above a compliance warning.
+		if sameOrigin {
+			if reason := p.tlsPolicy.Evaluate(diag.TLS); reason != probe.ReasonNone {
+				return diag, timings, reason
 			}
 		}
 

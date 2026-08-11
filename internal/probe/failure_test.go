@@ -14,6 +14,8 @@ func TestFailureReasonValid(t *testing.T) {
 		{"dns_error", ReasonDNSError, true},
 		{"connection_refused", ReasonConnectionRefused, true},
 		{"certificate_invalid", ReasonCertificateInvalid, true},
+		{"certificate_expiring", ReasonCertificateExpiring, true},
+		{"tls_policy_violation", ReasonTLSPolicyViolation, true},
 		{"downgrade", ReasonDowngrade, true},
 		{"timeout", ReasonTimeout, true},
 		{"unknown value", FailureReason("bogus"), false},
@@ -37,7 +39,8 @@ func TestAllReasonsValid(t *testing.T) {
 
 	declared := []FailureReason{
 		ReasonDNSError, ReasonTCPTimeout, ReasonConnectionRefused, ReasonTLSError,
-		ReasonCertificateExpired, ReasonCertificateInvalid, ReasonRedirectLoop,
+		ReasonCertificateExpired, ReasonCertificateInvalid, ReasonCertificateExpiring,
+		ReasonTLSPolicyViolation, ReasonRedirectLoop,
 		ReasonRedirectLimit, ReasonDowngrade, ReasonHTTPStatusError,
 		ReasonValidationFailed, ReasonTimeout, ReasonNetworkError,
 	}

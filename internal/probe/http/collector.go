@@ -13,9 +13,14 @@ type resultSource interface {
 }
 
 // Collector exposes the HTTP-specific metrics (phase timings, status code,
-// redirect count and TLS certificate diagnostics). It lives in the http package
-// — not the metrics package — so a new protocol can add its own collector
-// without the exporter needing to know about it (self-registering collectors).
+// redirect count and whether the final hop used TLS). It lives in the http
+// package — not the metrics package — so a new protocol can add its own
+// collector without the exporter needing to know about it (self-registering
+// collectors).
+//
+// The certificate series (sentinel_tls_*) are not emitted here: they are
+// protocol-independent and come from internal/tlsdiag's collector, which picks
+// up any probe whose diagnostics carry TLS information.
 type Collector struct {
 	results resultSource
 
@@ -25,9 +30,7 @@ type Collector struct {
 	tlsDuration *prometheus.Desc
 	download    *prometheus.Desc
 	redirects   *prometheus.Desc
-	certExpiry  *prometheus.Desc
-	certRemain  *prometheus.Desc
-	certValid   *prometheus.Desc
+	ssl         *prometheus.Desc
 }
 
 // NewCollector builds the HTTP metrics collector over the given result source.
@@ -44,9 +47,7 @@ func NewCollector(results resultSource) *Collector {
 		tlsDuration: desc("http_tls_handshake_duration_seconds", "TLS handshake time of the final hop."),
 		download:    desc("http_download_duration_seconds", "Response body download time of the final hop."),
 		redirects:   desc("http_redirects", "Number of redirects followed on the last probe."),
-		certExpiry:  desc("tls_certificate_expiry_timestamp_seconds", "Unix timestamp when the leaf certificate expires."),
-		certRemain:  desc("tls_certificate_remaining_days", "Whole days until the leaf certificate expires; negative if expired."),
-		certValid:   desc("tls_certificate_valid", "1 if the certificate passed Sentinel's checks, else 0."),
+		ssl:         desc("http_ssl", "1 if the final hop was served over TLS, else 0."),
 	}
 }
 
@@ -58,9 +59,7 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.tlsDuration
 	ch <- c.download
 	ch <- c.redirects
-	ch <- c.certExpiry
-	ch <- c.certRemain
-	ch <- c.certValid
+	ch <- c.ssl
 }
 
 // Collect implements prometheus.Collector.
@@ -89,14 +88,13 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 		gauge(c.download, t.Download.Seconds())
 		gauge(c.redirects, float64(len(diag.Redirects)))
 
+		// Unlike the sentinel_tls_* series this is emitted for plain HTTP too:
+		// a target that silently stops using TLS is exactly what it exists to
+		// reveal, and that shows up as a 1 -> 0 transition, not as a gap.
+		ssl := 0.0
 		if diag.TLS != nil {
-			gauge(c.certExpiry, float64(diag.TLS.ExpiresAt.Unix()))
-			gauge(c.certRemain, float64(diag.TLS.RemainingDays))
-			valid := 0.0
-			if diag.TLS.Valid {
-				valid = 1.0
-			}
-			gauge(c.certValid, valid)
+			ssl = 1.0
 		}
+		gauge(c.ssl, ssl)
 	}
 }

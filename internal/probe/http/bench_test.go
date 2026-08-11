@@ -12,6 +12,7 @@ import (
 
 	"bodsch.me/sentinel/internal/probe"
 	"bodsch.me/sentinel/internal/store"
+	"bodsch.me/sentinel/internal/tlsdiag"
 )
 
 // BenchmarkProbe measures the per-run overhead of the HTTP probe machinery
@@ -52,7 +53,7 @@ func benchHTTPResults(n int) fakeResults {
 				Diagnostics: &Diagnostics{
 					FinalURL:   "https://example/",
 					StatusCode: 200,
-					TLS:        &TLSInfo{ExpiresAt: time.Unix(int64(i), 0), RemainingDays: 42, HostnameValid: true, Valid: true},
+					TLS:        &tlsdiag.Info{ExpiresAt: time.Unix(int64(i), 0), RemainingDays: 42, HostnameValid: true, Valid: true},
 				},
 			},
 		}

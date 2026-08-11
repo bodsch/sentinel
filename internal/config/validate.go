@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/ohler55/ojg/jp"
+
+	"bodsch.me/sentinel/internal/tlsdiag"
 )
 
 // Validate checks the resolved configuration for structural and semantic errors.
@@ -241,6 +243,8 @@ func validateHTTP(label string, h *HTTPConfig) []error {
 		errs = append(errs, fmt.Errorf("config: %s: http.tls.insecure_skip_verify and http.tls.ca_file are mutually exclusive", label))
 	}
 
+	errs = append(errs, validateTLSExpect(label, h.TLS)...)
+
 	if h.ResolvedMaxRedirects() < 0 {
 		errs = append(errs, fmt.Errorf("config: %s: http.max_redirects must not be negative", label))
 	}
@@ -273,6 +277,47 @@ func validateHTTP(label string, h *HTTPConfig) []error {
 		}
 		if _, perr := jp.ParseString(jx.Path); perr != nil {
 			errs = append(errs, fmt.Errorf("config: %s: http.expect.json[%d].path %q is not valid JSONPath: %v", label, i, jx.Path, perr))
+		}
+	}
+
+	return errs
+}
+
+// validateTLSExpect validates a target's opt-in TLS expectations.
+//
+// Parameters:
+//   - label: the target label used in error messages.
+//   - t: the target's TLS block; nil or a block without expectations is valid.
+//
+// It returns one error per problem found, so a single run reports every issue
+// rather than only the first.
+func validateTLSExpect(label string, t *TLSConfig) []error {
+	if t == nil || t.Expect == nil {
+		return nil
+	}
+	var errs []error
+	e := t.Expect
+
+	// Expectations describe a verified connection. Combined with skip-verify
+	// they would be evaluated against a certificate nobody vouched for, which
+	// reads as a guarantee the configuration cannot give.
+	if t.InsecureSkipVerify {
+		errs = append(errs, fmt.Errorf("config: %s: http.tls.expect cannot be combined with http.tls.insecure_skip_verify", label))
+	}
+
+	if e.MinDaysRemaining < 0 {
+		errs = append(errs, fmt.Errorf("config: %s: http.tls.expect.min_days_remaining must not be negative", label))
+	}
+
+	if v := strings.TrimSpace(e.MinVersion); v != "" {
+		if _, err := tlsdiag.ParseVersion(v); err != nil {
+			errs = append(errs, fmt.Errorf("config: %s: http.tls.expect.min_version: %v", label, err))
+		}
+	}
+
+	if r := strings.TrimSpace(e.IssuerRegex); r != "" {
+		if _, err := regexp.Compile(r); err != nil {
+			errs = append(errs, fmt.Errorf("config: %s: http.tls.expect.issuer_regex %q is not a valid regular expression: %v", label, r, err))
 		}
 	}
 

@@ -26,6 +26,17 @@ const (
 	ReasonValidationFailed   FailureReason = "validation_failed"
 	ReasonTimeout            FailureReason = "timeout"
 
+	// ReasonCertificateExpiring means the certificate is still valid but expires
+	// within the window the target declared via tls.expect.min_days_remaining.
+	// It is deliberately distinct from ReasonCertificateExpired: the service
+	// still works, and the response is to renew, not to page.
+	ReasonCertificateExpiring FailureReason = "certificate_expiring"
+
+	// ReasonTLSPolicyViolation means the connection was cryptographically sound
+	// but breached a policy the target declared via tls.expect (minimum TLS
+	// version, required OCSP stapling, expected issuer).
+	ReasonTLSPolicyViolation FailureReason = "tls_policy_violation"
+
 	// ReasonNetworkError is the catch-all for network-level failures that do
 	// not fit a more specific reason above. It exists so the probe never has to
 	// silently misclassify an unusual error.
@@ -34,19 +45,21 @@ const (
 
 // allReasons is the set of valid, non-empty failure reasons, used by Valid.
 var allReasons = map[FailureReason]struct{}{
-	ReasonDNSError:           {},
-	ReasonTCPTimeout:         {},
-	ReasonConnectionRefused:  {},
-	ReasonTLSError:           {},
-	ReasonCertificateExpired: {},
-	ReasonCertificateInvalid: {},
-	ReasonRedirectLoop:       {},
-	ReasonRedirectLimit:      {},
-	ReasonDowngrade:          {},
-	ReasonHTTPStatusError:    {},
-	ReasonValidationFailed:   {},
-	ReasonTimeout:            {},
-	ReasonNetworkError:       {},
+	ReasonDNSError:            {},
+	ReasonTCPTimeout:          {},
+	ReasonConnectionRefused:   {},
+	ReasonTLSError:            {},
+	ReasonCertificateExpired:  {},
+	ReasonCertificateInvalid:  {},
+	ReasonCertificateExpiring: {},
+	ReasonTLSPolicyViolation:  {},
+	ReasonRedirectLoop:        {},
+	ReasonRedirectLimit:       {},
+	ReasonDowngrade:           {},
+	ReasonHTTPStatusError:     {},
+	ReasonValidationFailed:    {},
+	ReasonTimeout:             {},
+	ReasonNetworkError:        {},
 }
 
 // Valid reports whether r is a recognised failure reason. ReasonNone is not
