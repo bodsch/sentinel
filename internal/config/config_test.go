@@ -434,6 +434,52 @@ func TestValidationErrors(t *testing.T) {
 			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n      tls:\n        expect:\n          forbid_weak_ciphers: true\n",
 			wantSub: "forbid_weak_ciphers",
 		},
+		{
+			name:    "tls probe without host",
+			yaml:    "targets:\n  - name: x\n    tls:\n      port: 636\n",
+			wantSub: "tls.host is required",
+		},
+		{
+			name:    "tls probe port out of range",
+			yaml:    "targets:\n  - name: x\n    tls:\n      host: a.example\n      port: 70000\n",
+			wantSub: "tls.port 70000 must be a number in 1-65535",
+		},
+		{
+			name:    "tls probe missing port",
+			yaml:    "targets:\n  - name: x\n    tls:\n      host: a.example\n",
+			wantSub: "tls.port 0 must be a number in 1-65535",
+		},
+		{
+			name:    "tls probe empty alpn entry",
+			yaml:    "targets:\n  - name: x\n    tls:\n      host: a.example\n      port: 636\n      alpn: [\"\"]\n",
+			wantSub: "tls.alpn[0] must not be empty",
+		},
+		{
+			name:    "tls probe alongside http",
+			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n    tls:\n      host: a.example\n      port: 443\n",
+			wantSub: "multiple protocol blocks",
+		},
+		{
+			name:    "client certificate without key",
+			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n      tls:\n        cert_file: /etc/client.pem\n",
+			wantSub: "cert_file and http.tls.key_file must be set together",
+		},
+		{
+			name:    "client key without certificate",
+			yaml:    "targets:\n  - name: x\n    tls:\n      host: a.example\n      port: 636\n      key_file: /etc/client.key\n",
+			wantSub: "tls.cert_file and tls.key_file must be set together",
+		},
+		{
+			name:    "unsupported max_version",
+			yaml:    "targets:\n  - name: x\n    tls:\n      host: a.example\n      port: 636\n      max_version: \"1.1\"\n",
+			wantSub: "tls.max_version: unsupported TLS version",
+		},
+		{
+			// A floor above the ceiling can never be met.
+			name:    "min_version above max_version",
+			yaml:    "targets:\n  - name: x\n    tls:\n      host: a.example\n      port: 636\n      max_version: \"1.2\"\n      expect:\n        min_version: \"1.3\"\n",
+			wantSub: "can never be satisfied",
+		},
 	}
 
 	for _, tc := range tests {
@@ -580,5 +626,85 @@ targets:
 	}
 	if tlsCfg := cfg.Targets[0].HTTP.TLS; tlsCfg != nil && tlsCfg.Expect != nil {
 		t.Errorf("tls.expect = %+v, want nil without a tls block", tlsCfg.Expect)
+	}
+}
+
+// TestTLSProbeConfigParsed covers the standalone tls: block, including that the
+// shared verification settings are reachable through the embedded TLSConfig.
+func TestTLSProbeConfigParsed(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseResolve(t, `
+targets:
+  - name: ldaps
+    tls:
+      host: ldap.example.org
+      port: 636
+      server_name: ldap.internal
+      alpn: ["h2", "http/1.1"]
+      ca_file: /etc/sentinel/ca.pem
+      cert_file: /etc/sentinel/client.pem
+      key_file: /etc/sentinel/client.key
+      max_version: "1.3"
+      expect:
+        min_days_remaining: 21
+`)
+	if err != nil {
+		t.Fatalf("valid tls block rejected: %v", err)
+	}
+
+	tc := cfg.Targets[0].TLS
+	if tc == nil {
+		t.Fatal("tls block not parsed")
+	}
+	if tc.Host != "ldap.example.org" || tc.Port != 636 {
+		t.Errorf("endpoint = %s:%d, want ldap.example.org:636", tc.Host, tc.Port)
+	}
+	if got := tc.Endpoint(); got != "ldap.example.org:636" {
+		t.Errorf("Endpoint() = %q, want ldap.example.org:636", got)
+	}
+	if tc.ServerName != "ldap.internal" {
+		t.Errorf("server_name = %q, unexpected", tc.ServerName)
+	}
+	if len(tc.ALPN) != 2 || tc.ALPN[0] != "h2" {
+		t.Errorf("alpn = %v, want [h2 http/1.1]", tc.ALPN)
+	}
+	// Inherited from the embedded TLSConfig — the same keys as under http.tls.
+	if tc.CAFile != "/etc/sentinel/ca.pem" || tc.CertFile != "/etc/sentinel/client.pem" || tc.KeyFile != "/etc/sentinel/client.key" {
+		t.Errorf("shared TLS settings not parsed: %+v", tc.TLSConfig)
+	}
+	if tc.MaxVersion != "1.3" {
+		t.Errorf("max_version = %q, want 1.3", tc.MaxVersion)
+	}
+	if tc.Expect == nil || tc.Expect.MinDaysRemaining != 21 {
+		t.Errorf("expect = %+v, want min_days_remaining 21", tc.Expect)
+	}
+}
+
+// TestHTTPTLSConnectionSettings covers the same new keys on the http.tls side,
+// which is what makes them "shared" rather than duplicated.
+func TestHTTPTLSConnectionSettings(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseResolve(t, `
+targets:
+  - name: api
+    http:
+      url: https://192.0.2.10/health
+      tls:
+        server_name: api.internal
+        cert_file: /etc/sentinel/client.pem
+        key_file: /etc/sentinel/client.key
+        max_version: "1.2"
+`)
+	if err != nil {
+		t.Fatalf("valid http.tls block rejected: %v", err)
+	}
+	tc := cfg.Targets[0].HTTP.TLS
+	if tc.ServerName != "api.internal" || tc.MaxVersion != "1.2" {
+		t.Errorf("connection settings not parsed: %+v", tc)
+	}
+	if tc.CertFile == "" || tc.KeyFile == "" {
+		t.Errorf("client key pair not parsed: %+v", tc)
 	}
 }

@@ -25,7 +25,15 @@ import (
 //   - Secondary, non-configurable safety timeouts on the dial and TLS handshake
 //     so a single stuck phase cannot consume the whole run budget; the target's
 //     total timeout (the context deadline) remains the primary bound.
-func newTransport(verify func(tls.ConnectionState) error) *http.Transport {
+//   - GetClientCertificate rather than a fixed Certificates list: a client
+//     certificate identifies Sentinel and is therefore a credential, so it must
+//     obey the same origin guard as headers and auth. The callback is consulted
+//     per handshake and returns the identity only for the target's own origin.
+//   - ServerName and MaxVersion are connection-wide (the transport shares one
+//     tls.Config across hops and mutating it per hop would race the dial
+//     goroutine). MaxVersion is only ever more restrictive, so that is harmless;
+//     for ServerName see the note on Options.TLSServerName.
+func newTransport(cfg transportConfig) *http.Transport {
 	dialer := &net.Dialer{
 		Timeout:   safetyDialTimeout,
 		KeepAlive: -1, // no TCP keep-alive
@@ -37,11 +45,29 @@ func newTransport(verify func(tls.ConnectionState) error) *http.Transport {
 		TLSHandshakeTimeout:   safetyTLSTimeout,
 		ExpectContinueTimeout: 1 * time.Second,
 		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true, //nolint:gosec // verified in VerifyConnection during the handshake.
-			VerifyConnection:   verify,
-			MinVersion:         tls.VersionTLS12,
+			InsecureSkipVerify:   true, //nolint:gosec // verified in VerifyConnection during the handshake.
+			VerifyConnection:     cfg.verify,
+			GetClientCertificate: cfg.clientCertificate,
+			ServerName:           cfg.serverName,
+			MinVersion:           tls.VersionTLS12,
+			MaxVersion:           cfg.maxVersion,
 		},
 	}
+}
+
+// transportConfig carries the per-target TLS wiring into newTransport.
+type transportConfig struct {
+	// verify inspects the peer certificate during the handshake and aborts it by
+	// returning an error.
+	verify func(tls.ConnectionState) error
+	// clientCertificate supplies the client identity when the server asks for
+	// one. It is always installed; the callback itself decides whether the
+	// current hop may see the certificate.
+	clientCertificate func(*tls.CertificateRequestInfo) (*tls.Certificate, error)
+	// serverName overrides SNI and is empty unless the target configured one.
+	serverName string
+	// maxVersion caps the highest offered TLS version; zero means Go's default.
+	maxVersion uint16
 }
 
 // Secondary safety thresholds (not user-configurable). The per-target total

@@ -87,6 +87,10 @@ type Info struct {
 	CipherSuite uint16
 	// CipherName is the human-readable suite name, e.g. "TLS_AES_128_GCM_SHA256".
 	CipherName string
+	// ALPN is the application protocol agreed via ALPN, e.g. "h2". It is empty
+	// when the client offered none or the server selected none — which is the
+	// normal case for the HTTP probe, whose transport does not negotiate ALPN.
+	ALPN string
 
 	// --- leaf metadata ---
 
@@ -169,6 +173,7 @@ func Inspect(state *tls.ConnectionState, host string, now time.Time, roots *x509
 		VersionName: tls.VersionName(state.Version),
 		CipherSuite: state.CipherSuite,
 		CipherName:  tls.CipherSuiteName(state.CipherSuite),
+		ALPN:        state.NegotiatedProtocol,
 	}
 	describeLeaf(info, leaf)
 

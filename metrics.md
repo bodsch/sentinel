@@ -404,11 +404,14 @@ Instead:
 
 ## TLS Metrics
 
-Every `sentinel_tls_*` series carries the standard label set and is emitted by
-one protocol-independent collector (`internal/tlsdiag`), not by the HTTP
-collector. Any probe whose diagnostics carry certificate information produces the
-full set, which is what will let a future standalone `tls:` probe or a
-TLS-enabled TCP probe reuse these series unchanged.
+Every certificate-related `sentinel_tls_*` series carries the standard label set
+and is emitted by one protocol-independent collector (`internal/tlsdiag`), not by
+a protocol collector. Any probe whose diagnostics carry certificate information
+produces the full set — today an `http` target over HTTPS and a standalone `tls`
+target, tomorrow a TLS-enabled TCP probe, with no change to the collector.
+
+The three **phase timings** below are the exception: they belong to the `tls`
+probe specifically and are emitted only for `type="tls"`.
 
 **Vanishing semantics.** A target that did not negotiate TLS emits **no**
 `sentinel_tls_*` series at all — not zeros. A zero here always means a real
@@ -479,13 +482,42 @@ usable precisely in the failure case.
 ```
 sentinel_tls_version_info{version="TLS 1.3"}                  # always 1
 sentinel_tls_cipher_info{cipher="TLS_AES_128_GCM_SHA256"}      # always 1
+sentinel_tls_alpn_info{protocol="h2"}                          # always 1
 ```
 
-Both describe what was **negotiated**, not what the server additionally supports:
-Sentinel offers only TLS 1.2+ and Go's secure cipher suites, so a weak suite can
-never be agreed. Enumerating a server's *supported* suites needs several
-deliberately downgraded handshakes and is a job for the planned standalone `tls:`
-probe.
+The first two describe what was **negotiated**, not what the server additionally
+supports: Sentinel offers only TLS 1.2+ and Go's secure cipher suites, so a weak
+suite can never be agreed. Enumerating a server's *supported* suites needs
+several deliberately downgraded handshakes, which a probe that also measures
+latency must not do. For versions there is a practical substitute: pin a second
+target to `tls.max_version: "1.2"` and its success answers "does a TLS 1.2 client
+still get through?".
+
+`sentinel_tls_alpn_info` appears only when an application protocol was actually
+agreed — that is, for a `tls` target configured with `alpn`. The HTTP probe's
+transport negotiates no ALPN, so HTTPS targets emit no such series rather than an
+empty label.
+
+---
+
+### Phase timings (`type="tls"` only)
+
+```
+sentinel_tls_dns_duration_seconds        # name resolution
+sentinel_tls_connect_duration_seconds    # TCP connection establishment
+sentinel_tls_handshake_duration_seconds  # TLS handshake
+```
+
+Only the standalone `tls` probe emits these; an HTTPS target reports the same
+phases as `sentinel_http_dns_duration_seconds`,
+`sentinel_http_tcp_connect_duration_seconds` and
+`sentinel_http_tls_handshake_duration_seconds`.
+
+The probe resolves the name itself instead of leaving it to the dialler, which is
+what allows DNS and connect to be separated at all — the two call for entirely
+different investigations. The trade-off is that addresses are tried in sequence
+rather than raced (no Happy Eyeballs), which keeps each measurement attributable
+to a single address.
 
 ---
 
@@ -553,12 +585,19 @@ Note that `status="revoked"` does **not** fail the probe on its own. Set
 | `probe_ssl_last_chain_info{fingerprint_sha256,subject,issuer,subjectalternative}` | `sentinel_tls_certificate_info{…}` + `sentinel_tls_certificate_san_count` (SANs counted, not labelled) |
 | `probe_tls_version_info{version}` | `sentinel_tls_version_info{version}` |
 | `probe_http_ssl` | `sentinel_http_ssl` |
-| — | `sentinel_tls_cipher_info`, `_certificate_not_before_timestamp_seconds`, `_certificate_self_signed`, `_certificate_key_bits`, `_chain_length`, `_chain_verified`, `_ocsp_*` |
+| `tcp` module with `tls: true` | the `tls:` target type (plus DNS/connect/handshake timings, which the tcp module does not split out) |
+| — | `sentinel_tls_cipher_info`, `_alpn_info`, `_certificate_not_before_timestamp_seconds`, `_certificate_self_signed`, `_certificate_key_bits`, `_chain_length`, `_chain_verified`, `_ocsp_*` |
 
-Verified against `blackbox_exporter 0.28.0`: for the same certificate,
+Verified against `blackbox_exporter 0.28.0`, for HTTPS targets and for `tls`
+targets against its `tcp`+`tls: true` module: for the same certificate,
 `sentinel_tls_chain_earliest_expiry_timestamp_seconds` and
 `probe_ssl_earliest_cert_expiry` agree to the second, and the serial and SHA-256
 fingerprint match byte for byte.
+
+One behavioural difference surfaced while doing that comparison: on a host
+without an IPv6 route, blackbox's tcp module failed outright
+(`dial tcp6 …: no route to host`) where the `tls` probe succeeded, because it
+tries every resolved address in turn rather than committing to one family.
 
 ---
 
@@ -683,6 +722,7 @@ of targets. Measured per target (single scrape, `grep -c` on `/metrics`):
 | plain HTTP | 10 | 0 |
 | **HTTPS** | **25** | **15** |
 | HTTPS with OCSP stapling | 27 | 17 |
+| `tls` (standalone) | 21 | 18 |
 
 The latency histograms (`probe_duration`, `http_ttfb`) are separate: they are fed
 at probe time and each expands to `buckets + 2` series, independent of the

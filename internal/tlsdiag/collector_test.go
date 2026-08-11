@@ -79,6 +79,7 @@ func fullInfo() *Info {
 		VersionName:                "TLS 1.3",
 		CipherSuite:                tls.TLS_AES_128_GCM_SHA256,
 		CipherName:                 "TLS_AES_128_GCM_SHA256",
+		ALPN:                       "h2",
 		SubjectCN:                  "example.org",
 		IssuerCN:                   "Let's Encrypt R3",
 		Serial:                     "1267",
@@ -132,6 +133,7 @@ func TestCollector(t *testing.T) {
 		{name: "sentinel_tls_ocsp_next_update_timestamp_seconds", want: 2_500_000},
 		{name: "sentinel_tls_version_info", labels: map[string]string{"version": "TLS 1.3"}, want: 1},
 		{name: "sentinel_tls_cipher_info", labels: map[string]string{"cipher": "TLS_AES_128_GCM_SHA256"}, want: 1},
+		{name: "sentinel_tls_alpn_info", labels: map[string]string{"protocol": "h2"}, want: 1},
 		{name: "sentinel_tls_ocsp_info", labels: map[string]string{"status": "good"}, want: 1},
 		{
 			name: "sentinel_tls_certificate_info",
@@ -208,6 +210,9 @@ func TestCollectorOmitsUnsetOptionalSeries(t *testing.T) {
 	for _, name := range []string{
 		"sentinel_tls_version_info",
 		"sentinel_tls_cipher_info",
+		// No ALPN was offered or agreed — the common case for the HTTP probe,
+		// whose transport does not negotiate it.
+		"sentinel_tls_alpn_info",
 		"sentinel_tls_ocsp_info",
 		"sentinel_tls_ocsp_next_update_timestamp_seconds",
 		"sentinel_tls_certificate_not_before_timestamp_seconds",

@@ -4,9 +4,10 @@
 
 **Versions 0.1 and 0.2 are implemented and shipped.** The runtime skeleton
 (configuration → scheduler → probe → result store → `/metrics`) is complete, and
-three protocols run end-to-end: HTTP/HTTPS (full phase timing, methods, body,
-headers, auth, redirect handling, TLS chain verification), DNS (A/AAAA/MX/TXT)
-and TCP (connect + banner). Response validators cover status / body-regex /
+four protocols run end-to-end: HTTP/HTTPS (full phase timing, methods, body,
+headers, auth, redirect handling, TLS chain verification), DNS (A/AAAA/MX/TXT),
+TCP (connect + banner) and TLS (any endpoint speaking TLS on connect: LDAPS,
+SMTPS, IMAPS, MQTT …). Response validators cover status / body-regex /
 header / JSONPath, latency histograms are fed at probe time, and the build ships
 with security tooling (golangci-lint incl. gosec, govulncheck) and Forgejo CI /
 release pipelines. Later versions (0.3+) below are still planned.
@@ -112,6 +113,28 @@ Planned:
 
 - query/response sequences (send a payload, expect a reply) beyond a
   server-first banner
+- optional TLS on a TCP target. Today an endpoint that speaks TLS on connect is
+  covered by the `tls:` block instead, which is the clearer split: `tcp:` answers
+  "does it accept connections", `tls:` answers "is the certificate sound". The
+  combination only becomes interesting together with STARTTLS.
+
+---
+
+### TLS Monitoring
+
+Implemented:
+
+- standalone `tls:` target for endpoints speaking TLS on connect (`tls.host`,
+  `tls.port`), with DNS / connect / handshake phase timings
+- the complete certificate, chain, version, cipher and OCSP diagnostics shared
+  with the HTTPS path
+- ALPN negotiation (`tls.alpn`) reported as `sentinel_tls_alpn_info`
+- mutual TLS, SNI override and version cap shared with `http.tls`
+
+Planned:
+
+- STARTTLS, with the mail protocols in 0.3
+- supported-version / supported-cipher enumeration
 
 ---
 
@@ -242,16 +265,40 @@ Planned:
   switch would be a no-op. That enumeration needs several deliberately downgraded
   handshakes and is reassigned to the standalone `tls:` probe below.
 
+- ~~standalone `tls:` probe~~ **(implemented)**: a fourth protocol block for
+  endpoints that speak TLS immediately on connect — LDAPS 636, SMTPS 465,
+  IMAPS 993, MQTT 8883, any bare TLS port. It reuses `internal/tlsdiag`
+  unchanged and therefore emits the identical certificate/chain/OCSP series,
+  plus three phase timings of its own (`sentinel_tls_dns_duration_seconds`,
+  `_connect_duration_seconds`, `_handshake_duration_seconds`). Name resolution is
+  performed explicitly so DNS and connect can be reported separately; addresses
+  are tried in sequence, which — unlike blackbox's tcp module in the same
+  benchmark — survives a host without an IPv6 route.
+- ~~client certificates (mTLS), explicit SNI `server_name`~~ **(implemented)**:
+  `tls.cert_file`/`tls.key_file`, `tls.server_name`, shared by `http.tls` and the
+  new `tls:` block. The client certificate is treated as a credential and obeys
+  the origin guard — a cross-origin redirect never receives it. Because TLS 1.3
+  reports the client handshake complete before the server has validated that
+  identity, the probe confirms afterwards that the connection was actually
+  accepted; without that a rejected mTLS target would report success.
+- ~~connection version cap~~ **(implemented)**: `tls.max_version` turns a target
+  into a compatibility check ("does this server still serve TLS 1.2 clients?").
+  A matching `min_version` was deliberately not added — `expect.min_version`
+  enforces a floor *and* reports what was negotiated, and two options of the same
+  name with different semantics is a configuration trap.
+- ~~ALPN reporting~~ **(implemented for the `tls:` probe)**:
+  `sentinel_tls_alpn_info{protocol}` from a configurable `alpn` list. It stays
+  absent for HTTPS targets, whose transport negotiates no ALPN — reporting it
+  there needs HTTP/2 support in the probe transport first.
+
 Planned:
 
-- standalone `tls:` probe for non-HTTP endpoints (LDAPS, SMTPS, MQTT, any bare TLS
-  port), reusing `internal/tlsdiag`; also the right home for supported-version and
-  supported-cipher enumeration
-- client certificates (mTLS), explicit SNI `server_name`, per-target
-  `min_version`/`max_version` on the connection itself
+- supported-version and supported-cipher enumeration in the `tls:` probe (needs
+  several deliberately downgraded handshakes; `max_version` covers the common
+  case today)
+- STARTTLS (SMTP 587, IMAP 143, LDAP 389), together with the mail protocols in
+  0.3 — the upgrade dialogue is protocol-specific and belongs with them
 - active OCSP / CRL revocation checking as a per-target opt-in
-- ALPN reporting (needs HTTP/2 support in the probe transport first; without it
-  no protocol is negotiated and the metric would be constantly empty)
 
 ---
 

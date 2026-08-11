@@ -41,6 +41,13 @@ func TestExampleConfigIsValid(t *testing.T) {
 			if tg.TCP.Address == "" {
 				t.Errorf("target %q has an empty tcp.address", tg.Name)
 			}
+		case tg.TLS != nil:
+			if tg.TLS.Host == "" {
+				t.Errorf("target %q has an empty tls.host", tg.Name)
+			}
+			if tg.TLS.Port < 1 || tg.TLS.Port > 65535 {
+				t.Errorf("target %q has tls.port %d out of range", tg.Name, tg.TLS.Port)
+			}
 		default:
 			t.Errorf("target %q has no protocol block", tg.Name)
 		}

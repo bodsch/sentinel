@@ -249,6 +249,57 @@ a genuine functional failure above a compliance warning.
 
 ---
 
+### TLS Probe
+
+The TLS probe covers endpoints that speak TLS immediately on connect — LDAPS,
+SMTPS, IMAPS, MQTT over TLS, any bare TLS port — which carry no HTTP to probe
+them with, while the TCP probe never sees the certificate behind the connection.
+
+Pipeline:
+
+```
+DNS Resolution
+    |
+TCP Connect
+    |
+TLS Handshake  ->  certificate inspection (internal/tlsdiag)
+    |
+TLS Policy
+    |
+Metrics Collection
+```
+
+It contributes remarkably little code, and that is the payoff of the earlier
+extraction: the inspection, the failure classification and every
+`sentinel_tls_*` series already exist. The probe attaches a `*tlsdiag.Info` to
+its diagnostics and implements `tlsdiag.Provider`; the shared collector does the
+rest without knowing the package exists. What is genuinely new is the dialling
+and three phase-timing metrics.
+
+**Name resolution is explicit.** `httptrace` is unavailable outside HTTP, so the
+probe resolves with `net.Resolver` and then dials the returned addresses in turn,
+which is what allows DNS and connect time to be reported separately — the split
+is the reason the probe is worth having over a plain connect check. The trade-off
+is the loss of Happy Eyeballs: addresses are tried in sequence rather than raced.
+For a monitoring probe that is the better bargain, because each measurement stays
+attributable to exactly one address, and trying every address still tolerates a
+broken IPv6 path.
+
+**Verification runs during the handshake**, as in the HTTP probe, and for the
+same reason: with mutual TLS configured, the client certificate is sent only
+after the server's certificate has been processed, so aborting there keeps
+Sentinel's identity from reaching a peer it does not trust.
+
+**Acceptance is confirmed afterwards.** Under TLS 1.3 the client considers the
+handshake complete as soon as it has sent its own Finished message — before the
+server has validated the client certificate. A server that rejects the identity
+replies with an alert that only surfaces on the next read. Without a short
+post-handshake read, a target requiring mutual TLS would therefore report success
+while being entirely unusable. The read happens only when the server actually
+asked for a certificate, so the ordinary probe pays nothing for it.
+
+---
+
 ## HTTP Timing Model
 
 Sentinel separates HTTP timing into individual phases.

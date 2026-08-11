@@ -221,3 +221,60 @@ targets:
       expect:
         banner_regex:
           - "^SSH-2.0"
+
+  # Standalone TLS check: any endpoint that speaks TLS immediately on connect
+  # (LDAPS 636, SMTPS 465, IMAPS 993, MQTT 8883, or a bare TLS port). It emits
+  # the same certificate/chain/OCSP metrics as an HTTPS target, plus its own
+  # DNS/connect/handshake phase timings. STARTTLS ports (587, 143, 389) are not
+  # supported — use the implicit-TLS port where one exists.
+  - name: ldaps
+    interval: 1m
+    tags:
+      service: directory
+      environment: production
+    tls:
+      host: ldap.example.org
+      port: 636
+      expect:
+        min_days_remaining: 21
+
+  # TLS check against an IP address behind an SNI-routing load balancer, with
+  # ALPN. Without server_name the server would answer with its default
+  # certificate: Go sends no SNI for an IP literal.
+  - name: lb-endpoint
+    interval: 1m
+    tags:
+      service: web
+      environment: production
+    tls:
+      host: 192.0.2.20
+      port: 443
+      server_name: www.example.org
+      alpn: ["h2", "http/1.1"]
+
+  # Compatibility check: does the endpoint still serve TLS 1.2 clients? Pair it
+  # with an uncapped target on the same endpoint to see the whole picture.
+  - name: tls12-compatibility
+    interval: 5m
+    tags:
+      service: web
+      environment: production
+    tls:
+      host: www.example.org
+      port: 443
+      max_version: "1.2"
+
+  # Mutual TLS against an internal endpoint. cert_file/key_file are read at
+  # startup and, being a credential, are only ever sent to this target's own
+  # origin.
+  - name: internal-mtls
+    interval: 1m
+    tags:
+      service: backend
+      environment: production
+    tls:
+      host: api.internal.example
+      port: 8443
+      ca_file: /etc/sentinel/internal-ca.pem
+      cert_file: /etc/sentinel/sentinel-client.pem
+      key_file: /etc/sentinel/sentinel-client.key
