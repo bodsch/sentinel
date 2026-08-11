@@ -3,3 +3,7 @@
 run/
 logs/
 results.txt
+
+# benchtool built by hand from this directory (`go build` here names the binary
+# after the package directory). run.sh builds into .cache/ instead.
+/bench
