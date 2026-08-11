@@ -1,9 +1,10 @@
 // Package config loads, validates and resolves Sentinel's YAML configuration.
 //
-// The 0.1 configuration surface is intentionally small: a global `defaults`
-// block and a list of `targets`, with no templates. Defaults are merged into
-// each target with a trivial rule — a value set on the target wins, otherwise
-// the default applies (no deep merge). Only the HTTP protocol is supported.
+// The configuration surface is intentionally small: a global `defaults` block
+// and a list of `targets`, with no templates. Defaults are merged into each
+// target with a trivial rule — a value set on the target wins, otherwise the
+// default applies (no deep merge). Each target carries exactly one protocol
+// block: `http`, `dns`, `tcp` or `tls`.
 //
 // Validation checks structure, schema and semantics only; it never checks
 // reachability. Whether a target host resolves or responds is a runtime
@@ -12,6 +13,9 @@ package config
 
 import (
 	"fmt"
+	"net"
+	"strconv"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -75,8 +79,7 @@ type HTTPDefaults struct {
 	MaxBodyBytes    *int64 `yaml:"max_body_bytes"`
 }
 
-// Target is one monitored endpoint. Exactly one protocol block must be present
-// (HTTP or DNS).
+// Target is one monitored endpoint. Exactly one protocol block must be present.
 //
 // Interval and Timeout are pointers so an explicitly configured non-positive
 // value can be told apart from "unset". The effective values, after merging
@@ -89,6 +92,7 @@ type Target struct {
 	HTTP     *HTTPConfig       `yaml:"http"`
 	DNS      *DNSConfig        `yaml:"dns"`
 	TCP      *TCPConfig        `yaml:"tcp"`
+	TLS      *TLSProbeConfig   `yaml:"tls"`
 
 	// resolved effective values, filled by applyDefaults.
 	resolvedInterval time.Duration
@@ -143,6 +147,24 @@ type TLSConfig struct {
 	// CAFile is a PEM bundle to verify the chain against instead of the system
 	// roots (the secure way to monitor an internal-CA endpoint).
 	CAFile string `yaml:"ca_file"`
+	// CertFile and KeyFile are a PEM client certificate and its private key,
+	// presented when the server asks for one (mutual TLS). Both must be set
+	// together. The pair is read at startup, so a missing or malformed file is a
+	// startup error rather than a runtime surprise.
+	CertFile string `yaml:"cert_file"`
+	KeyFile  string `yaml:"key_file"`
+	// ServerName overrides the name sent in the TLS SNI extension *and* the
+	// hostname the certificate is validated against (curl's --resolve
+	// semantics). It is required to probe a virtual host by IP address: Go sends
+	// no SNI for an IP literal, so the server would answer with its default
+	// certificate.
+	ServerName string `yaml:"server_name"`
+	// MaxVersion caps the highest TLS version offered, "1.2" or "1.3". Its use is
+	// compatibility testing — a target pinned to "1.2" answers "does this server
+	// still work for a TLS 1.2 client?". There is deliberately no matching
+	// minimum: Expect.MinVersion enforces a floor *and* still reports which
+	// version the server actually negotiated.
+	MaxVersion string `yaml:"max_version"`
 	// Expect declares opt-in TLS expectations. When nil (the default) nothing
 	// beyond the standard certificate verification is enforced.
 	Expect *TLSExpect `yaml:"expect"`
@@ -226,6 +248,38 @@ type TCPExpect struct {
 	// probe reads a banner after connecting; when empty, the probe only checks
 	// that a connection can be established.
 	BannerRegex []string `yaml:"banner_regex"`
+}
+
+// TLSProbeConfig describes a standalone TLS check against any endpoint that
+// speaks TLS immediately on connect — LDAPS, SMTPS, IMAPS, MQTT over TLS, or a
+// bare TLS port. It exists because such endpoints carry no HTTP to probe them
+// with, while the TCP probe sees only the connection and never the certificate.
+//
+// STARTTLS (ports 587, 143, 389 …) is out of scope: the upgrade needs a
+// protocol-specific plaintext dialogue, which belongs with the mail protocols
+// themselves rather than in a generic TLS check.
+//
+// The verification and connection settings are shared with http.tls through the
+// embedded TLSConfig, so ca_file, insecure_skip_verify, cert_file/key_file,
+// server_name, max_version and expect are written exactly the same way in both
+// blocks.
+type TLSProbeConfig struct {
+	// Host is the hostname or IP address to connect to. It is also the name the
+	// certificate must be valid for, unless ServerName overrides it.
+	Host string `yaml:"host"`
+	// Port is the TCP port, 1-65535.
+	Port int `yaml:"port"`
+	// ALPN are the application protocols to offer in the TLS handshake, most
+	// preferred first (e.g. ["h2", "http/1.1"]). The negotiated protocol is
+	// reported as sentinel_tls_alpn_info. Empty means no ALPN is offered.
+	ALPN []string `yaml:"alpn"`
+
+	TLSConfig `yaml:",inline"`
+}
+
+// Endpoint returns the "host:port" address the probe connects to.
+func (t *TLSProbeConfig) Endpoint() string {
+	return net.JoinHostPort(strings.TrimSpace(t.Host), strconv.Itoa(t.Port))
 }
 
 // Duration is a time.Duration that unmarshals from a Go duration string such as

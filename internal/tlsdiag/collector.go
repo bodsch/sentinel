@@ -41,6 +41,7 @@ type Collector struct {
 	// negotiated connection
 	versionInfo *prometheus.Desc
 	cipherInfo  *prometheus.Desc
+	alpnInfo    *prometheus.Desc
 
 	// revocation
 	ocspStapled    *prometheus.Desc
@@ -92,6 +93,7 @@ func NewCollector(results resultSource) *Collector {
 
 		versionInfo: desc("tls_version_info", "Negotiated TLS version. Always 1; the version label carries the data.", "version"),
 		cipherInfo:  desc("tls_cipher_info", "Negotiated cipher suite. Always 1; the cipher label carries the data.", "cipher"),
+		alpnInfo:    desc("tls_alpn_info", "Application protocol negotiated via ALPN. Always 1; the protocol label carries the data.", "protocol"),
 
 		ocspStapled:    desc("tls_ocsp_stapled", "1 if the server stapled an OCSP response to the handshake, else 0."),
 		ocspInfo:       desc("tls_ocsp_info", "Status of the stapled OCSP response. Always 1; the status label carries the data.", "status"),
@@ -112,7 +114,7 @@ func (c *Collector) descs() []*prometheus.Desc {
 		c.certExpiry, c.certNotBefore, c.certRemain, c.certValid,
 		c.certSelfSign, c.certKeyBits, c.certSANCount, c.certInfo,
 		c.chainExpiry, c.chainRemain, c.chainLength, c.chainVerified,
-		c.versionInfo, c.cipherInfo,
+		c.versionInfo, c.cipherInfo, c.alpnInfo,
 		c.ocspStapled, c.ocspInfo, c.ocspNextUpdate,
 	}
 }
@@ -183,6 +185,9 @@ func (c *Collector) collectOne(ch chan<- prometheus.Metric, labels []string, inf
 	}
 	if info.CipherName != "" {
 		gauge(c.cipherInfo, 1, info.CipherName)
+	}
+	if info.ALPN != "" {
+		gauge(c.alpnInfo, 1, info.ALPN)
 	}
 
 	gauge(c.ocspStapled, boolValue(info.OCSP != nil))

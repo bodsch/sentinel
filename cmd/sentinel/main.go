@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"flag"
 	"fmt"
@@ -23,6 +24,7 @@ import (
 	dnsprobe "bodsch.me/sentinel/internal/probe/dns"
 	httpprobe "bodsch.me/sentinel/internal/probe/http"
 	tcpprobe "bodsch.me/sentinel/internal/probe/tcp"
+	tlsprobe "bodsch.me/sentinel/internal/probe/tls"
 	"bodsch.me/sentinel/internal/scheduler"
 	"bodsch.me/sentinel/internal/server"
 	"bodsch.me/sentinel/internal/store"
@@ -138,10 +140,13 @@ func serve(cfg options, loaded *config.Config, logger *slog.Logger) int {
 	// Parsed CA pools are shared across targets that reference the same ca_file,
 	// so each bundle is read and parsed once regardless of target count.
 	caPools := map[string]*x509.CertPool{}
+	// Client identities are likewise shared: several targets commonly present the
+	// same certificate.
+	clientCerts := map[string]*tls.Certificate{}
 
 	for i := range loaded.Targets {
 		target := loaded.Targets[i]
-		prober, ptype, err := buildProber(target, caPools)
+		prober, ptype, err := buildProber(target, caPools, clientCerts)
 		if err != nil {
 			logger.Error("building probe", slog.String("target", target.Name), slog.Any("error", err))
 			return exitError
@@ -166,6 +171,7 @@ func serve(cfg options, loaded *config.Config, logger *slog.Logger) int {
 	reg.MustRegister(httpprobe.NewCollector(st))
 	reg.MustRegister(dnsprobe.NewCollector(st))
 	reg.MustRegister(tcpprobe.NewCollector(st))
+	reg.MustRegister(tlsprobe.NewCollector(st))
 	reg.MustRegister(tlsdiag.NewCollector(st))
 
 	// Expose the process's own runtime health (goroutines, heap, GC, CPU, FDs).
@@ -221,10 +227,10 @@ func serve(cfg options, loaded *config.Config, logger *slog.Logger) int {
 
 // buildProber constructs the prober for a target based on which protocol block
 // is present, returning the prober and its type label.
-func buildProber(target config.Target, caPools map[string]*x509.CertPool) (probe.Prober, string, error) {
+func buildProber(target config.Target, caPools map[string]*x509.CertPool, clientCerts map[string]*tls.Certificate) (probe.Prober, string, error) {
 	switch {
 	case target.HTTP != nil:
-		opts, err := httpOptions(target, caPools)
+		opts, err := httpOptions(target, caPools, clientCerts)
 		if err != nil {
 			return nil, "", err
 		}
@@ -236,9 +242,119 @@ func buildProber(target config.Target, caPools map[string]*x509.CertPool) (probe
 	case target.TCP != nil:
 		p, err := tcpprobe.New(tcpOptions(target))
 		return p, tcpprobe.ProbeType, err
+	case target.TLS != nil:
+		opts, err := tlsProbeOptions(target, caPools, clientCerts)
+		if err != nil {
+			return nil, "", err
+		}
+		p, err := tlsprobe.New(opts)
+		return p, tlsprobe.ProbeType, err
 	default:
 		return nil, "", fmt.Errorf("target %q has no protocol block", target.Name)
 	}
+}
+
+// tlsProbeOptions maps a resolved config target to TLS prober options. It returns
+// an error when a configured ca_file or client key pair cannot be read.
+func tlsProbeOptions(target config.Target, caPools map[string]*x509.CertPool, clientCerts map[string]*tls.Certificate) (tlsprobe.Options, error) {
+	t := target.TLS
+	opts := tlsprobe.Options{
+		Name:       target.Name,
+		Host:       strings.TrimSpace(t.Host),
+		Port:       t.Port,
+		Timeout:    target.ResolvedTimeout(),
+		ServerName: strings.TrimSpace(t.ServerName),
+		ALPN:       t.ALPN,
+	}
+
+	settings, err := tlsSettings(&t.TLSConfig, caPools, clientCerts)
+	if err != nil {
+		return opts, fmt.Errorf("tls target %q: %w", target.Name, err)
+	}
+	opts.SkipVerify = settings.skipVerify
+	opts.Roots = settings.roots
+	opts.ClientCert = settings.clientCert
+	opts.MaxVersion = settings.maxVersion
+	opts.Policy = settings.policy
+	return opts, nil
+}
+
+// resolvedTLS holds the loaded, ready-to-use form of a TLSConfig block.
+type resolvedTLS struct {
+	skipVerify bool
+	roots      *x509.CertPool
+	clientCert *tls.Certificate
+	maxVersion uint16
+	policy     *tlsdiag.Policy
+}
+
+// tlsSettings turns a configuration TLS block into its runtime form, loading the
+// CA bundle and client key pair from disk.
+//
+// Parameters:
+//   - cfg: the block to resolve; nil yields the zero value (system roots, no
+//     policy).
+//   - caPools: memoisation cache for parsed CA bundles, keyed by path.
+//   - clientCerts: memoisation cache for client key pairs, keyed by both paths.
+//
+// It returns an error when a file cannot be read or parsed, or when a value
+// cannot be interpreted. Configuration validation rejects those already, so an
+// error here is defensive — except for the file reads, which validation
+// deliberately does not perform.
+func tlsSettings(cfg *config.TLSConfig, caPools map[string]*x509.CertPool, clientCerts map[string]*tls.Certificate) (resolvedTLS, error) {
+	var out resolvedTLS
+	if cfg == nil {
+		return out, nil
+	}
+	out.skipVerify = cfg.InsecureSkipVerify
+
+	if caFile := strings.TrimSpace(cfg.CAFile); caFile != "" {
+		pool, err := loadCAPool(caFile, caPools)
+		if err != nil {
+			return out, err
+		}
+		out.roots = pool
+	}
+
+	if certFile, keyFile := strings.TrimSpace(cfg.CertFile), strings.TrimSpace(cfg.KeyFile); certFile != "" && keyFile != "" {
+		cert, err := loadClientCert(certFile, keyFile, clientCerts)
+		if err != nil {
+			return out, err
+		}
+		out.clientCert = cert
+	}
+
+	if v := strings.TrimSpace(cfg.MaxVersion); v != "" {
+		version, err := tlsdiag.ParseVersion(v)
+		if err != nil {
+			return out, fmt.Errorf("tls.max_version: %w", err)
+		}
+		out.maxVersion = version
+	}
+
+	policy, err := tlsPolicy(cfg.Expect)
+	if err != nil {
+		return out, err
+	}
+	out.policy = policy
+	return out, nil
+}
+
+// loadClientCert returns the client key pair for the given files, reading and
+// parsing it once and memoising the result in cache. Loading at startup means a
+// missing or malformed identity is a configuration error, not a failure that
+// only shows up as a mysterious handshake error hours later.
+func loadClientCert(certFile, keyFile string, cache map[string]*tls.Certificate) (*tls.Certificate, error) {
+	key := certFile + "\x00" + keyFile
+	if cert, ok := cache[key]; ok {
+		return cert, nil
+	}
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("reading tls client key pair (%q, %q): %w", certFile, keyFile, err)
+	}
+	cache[key] = &cert
+	return &cert, nil
 }
 
 // tcpOptions maps a resolved config target to TCP prober options.
@@ -266,9 +382,10 @@ func dnsOptions(target config.Target) dnsprobe.Options {
 }
 
 // httpOptions maps a resolved config target to HTTP prober options. It returns
-// an error only when a configured tls.ca_file cannot be read or parsed. caPools
-// memoises parsed CA bundles by path so a shared ca_file is read once.
-func httpOptions(target config.Target, caPools map[string]*x509.CertPool) (httpprobe.Options, error) {
+// an error only when a configured tls.ca_file or client key pair cannot be read
+// or parsed. The caches memoise parsed CA bundles and key pairs by path, so
+// material shared between targets is read once.
+func httpOptions(target config.Target, caPools map[string]*x509.CertPool, clientCerts map[string]*tls.Certificate) (httpprobe.Options, error) {
 	h := target.HTTP
 	opts := httpprobe.Options{
 		Name:            target.Name,
@@ -291,19 +408,16 @@ func httpOptions(target config.Target, caPools map[string]*x509.CertPool) (httpp
 		opts.BasicAuthPass = h.BasicAuth.Password
 	}
 	if h.TLS != nil {
-		opts.TLSSkipVerify = h.TLS.InsecureSkipVerify
-		if caFile := strings.TrimSpace(h.TLS.CAFile); caFile != "" {
-			pool, err := loadCAPool(caFile, caPools)
-			if err != nil {
-				return opts, fmt.Errorf("http target %q: %w", target.Name, err)
-			}
-			opts.TLSRoots = pool
-		}
-		policy, err := tlsPolicy(h.TLS.Expect)
+		settings, err := tlsSettings(h.TLS, caPools, clientCerts)
 		if err != nil {
 			return opts, fmt.Errorf("http target %q: %w", target.Name, err)
 		}
-		opts.TLSPolicy = policy
+		opts.TLSSkipVerify = settings.skipVerify
+		opts.TLSRoots = settings.roots
+		opts.TLSClientCert = settings.clientCert
+		opts.TLSMaxVersion = settings.maxVersion
+		opts.TLSPolicy = settings.policy
+		opts.TLSServerName = strings.TrimSpace(h.TLS.ServerName)
 	}
 	return opts, nil
 }

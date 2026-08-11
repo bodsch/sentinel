@@ -30,7 +30,8 @@ already ships:
 - **TLS diagnostics** across the whole certificate chain: earliest expiry, chain length and trust,
   negotiated version and cipher, certificate identity and key strength, OCSP stapling, plus opt-in
   per-target expectations (`http.tls.expect`)
-- a **DNS** probe (A/AAAA/MX/TXT) and a **TCP** probe (connection check + optional banner validation)
+- a **DNS** probe (A/AAAA/MX/TXT), a **TCP** probe (connection check + optional banner validation)
+  and a **TLS** probe for any endpoint speaking TLS on connect (LDAPS, SMTPS, IMAPS, MQTT, …)
 - response validators: status, body regex, header match, and **JSONPath** (`expect.json`)
 - latency **histograms** fed at probe time, plus per-phase gauges and `go_*`/`process_*` runtime metrics
 
@@ -132,12 +133,14 @@ Supported features:
   cipher suite, certificate identity (subject, issuer, serial, SHA-256
   fingerprint, signature and key algorithm, key bits, SAN count), self-signed
   detection, and verified **OCSP stapling** (no request to the CA)
-- opt-in TLS expectations per target (`http.tls.expect`): minimum remaining days
+- opt-in TLS expectations per target (`tls.expect`): minimum remaining days
   across the chain, minimum TLS version, required OCSP stapling, issuer pinning —
   each with its own failure reason
+- mutual TLS (`tls.cert_file`/`tls.key_file`, sent only to the target's own
+  origin), SNI override (`tls.server_name`, needed to probe a virtual host by IP)
+  and a version cap (`tls.max_version`) for compatibility checks
 
-Planned: HTTP/2 tuning, HTTP/3, XPath validation, compression analysis,
-standalone `tls:` probe for non-HTTP endpoints.
+Planned: HTTP/2 tuning, HTTP/3, XPath validation, compression analysis.
 
 Measured phases:
 

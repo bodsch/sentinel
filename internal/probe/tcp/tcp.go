@@ -10,7 +10,6 @@ import (
 	"net"
 	"regexp"
 	"strings"
-	"syscall"
 	"time"
 
 	"bodsch.me/sentinel/internal/probe"
@@ -161,25 +160,9 @@ func (p *Prober) bannerMatches(s string) bool {
 	return true
 }
 
-// classifyError maps a dial error to a stable FailureReason, mirroring the HTTP
-// probe's classification so reasons are consistent across protocols.
+// classifyError maps a dial or read error to a stable FailureReason. It delegates
+// to the shared classification so a given failure reports the same reason no
+// matter which protocol observed it.
 func classifyError(err error) probe.FailureReason {
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-		return probe.ReasonTimeout
-	}
-	var dnsErr *net.DNSError
-	if errors.As(err, &dnsErr) {
-		return probe.ReasonDNSError
-	}
-	if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) {
-		return probe.ReasonConnectionRefused
-	}
-	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
-		return probe.ReasonTCPTimeout
-	}
-	if errors.Is(err, syscall.EHOSTUNREACH) || errors.Is(err, syscall.ENETUNREACH) {
-		return probe.ReasonConnectionRefused
-	}
-	return probe.ReasonNetworkError
+	return probe.ClassifyNetworkError(err)
 }

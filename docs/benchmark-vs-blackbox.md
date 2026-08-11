@@ -16,7 +16,8 @@ The two tools use fundamentally different probe models:
 | Scrape cost | = one full probe (network I/O) | ~O(N) memory read, no I/O |
 | State kept | none between scrapes | per-target record + metric series |
 | Timing method | `httptrace` (DNS/TCP/TLS/TTFB) | `httptrace` (same phases) |
-| TLS diagnostics | leaf + presented-chain expiry, chain info, negotiated version | + root-inclusive chain expiry, chain length/verified, cipher, key bits, NotBefore, self-signed, OCSP stapling, opt-in `tls.expect` policy (see `metrics.md` → *Comparison with the blackbox_exporter*) |
+| TLS diagnostics | leaf + presented-chain expiry, chain info, negotiated version | + root-inclusive chain expiry, chain length/verified, cipher, ALPN, key bits, NotBefore, self-signed, OCSP stapling, opt-in `tls.expect` policy (see `metrics.md` → *Comparison with the blackbox_exporter*) |
+| Non-HTTP TLS endpoints | `tcp` module with `tls: true` | `tls:` target type, with DNS/connect/handshake split out and every address tried in turn (blackbox's tcp module failed outright on a host without an IPv6 route) |
 
 A single "who uses less CPU" number is therefore architecture-dependent. We
 measure three levels: **A)** per-probe engine cost (apples-to-apples),

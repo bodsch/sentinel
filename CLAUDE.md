@@ -15,7 +15,8 @@ er langsam/nicht erreichbar?" — über phasengenaue Diagnostik (DNS/TCP/TLS/TTF
 - aktives, kontinuierliches Verproben konfigurierter Targets (entkoppelt vom Prometheus-Scrape)
 - HTTP/HTTPS-Probes mit phasengenauem Timing (DNS, TCP, TLS, TTFB, Download), Methoden
   GET/HEAD/POST/PUT/PATCH/DELETE, Request-Body, Custom-Headern und Basic/Bearer-Auth
-- DNS-Probe (A/AAAA/MX/TXT) und TCP-Probe (Connect + optionale Banner-Validierung)
+- DNS-Probe (A/AAAA/MX/TXT), TCP-Probe (Connect + optionale Banner-Validierung) und
+  TLS-Probe für beliebige Endpunkte, die direkt TLS sprechen (LDAPS, SMTPS, IMAPS, MQTT …)
 - Response-Validierung (Status-Code, Body-Regex, Header, JSONPath)
 - Redirect-Handling inkl. Loop- und HTTPS→HTTP-Downgrade-Erkennung
 - TLS-Diagnostik über die gesamte Zertifikatskette (früheste Ablaufzeit, Kettenlänge/Trust,
@@ -160,7 +161,8 @@ Der Agent soll:
 │   ├── probe             # Prober interface, Result, FailureReason enum
 │   │   ├── http          # HTTP probe: httptrace timings, redirects, TLS inspection
 │   │   ├── dns           # DNS probe: miekg/dns, RCODE/answers, TCP fallback
-│   │   └── tcp           # TCP probe: connection check + optional banner_regex
+│   │   ├── tcp           # TCP probe: connection check + optional banner_regex
+│   │   └── tls           # TLS probe: any TLS-on-connect endpoint, phase timings
 │   ├── validator         # Validator interface + status/regex/header/jsonpath
 │   ├── scheduler         # ticker-per-target + semaphore + skip-if-running
 │   ├── store             # thread-safe result store (name = primary key)

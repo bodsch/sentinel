@@ -81,11 +81,14 @@ func validateTarget(t *Target) []error {
 	if t.TCP != nil {
 		protocols++
 	}
+	if t.TLS != nil {
+		protocols++
+	}
 	switch {
 	case protocols == 0:
-		errs = append(errs, fmt.Errorf("config: %s: no protocol block (exactly one of \"http\", \"dns\", \"tcp\" is required)", label))
+		errs = append(errs, fmt.Errorf("config: %s: no protocol block (exactly one of \"http\", \"dns\", \"tcp\", \"tls\" is required)", label))
 	case protocols > 1:
-		errs = append(errs, fmt.Errorf("config: %s: multiple protocol blocks (exactly one of \"http\", \"dns\", \"tcp\" is allowed)", label))
+		errs = append(errs, fmt.Errorf("config: %s: multiple protocol blocks (exactly one of \"http\", \"dns\", \"tcp\", \"tls\" is allowed)", label))
 	}
 
 	if t.HTTP != nil {
@@ -96,6 +99,9 @@ func validateTarget(t *Target) []error {
 	}
 	if t.TCP != nil {
 		errs = append(errs, validateTCP(label, t.TCP)...)
+	}
+	if t.TLS != nil {
+		errs = append(errs, validateTLSProbe(label, t.TLS)...)
 	}
 
 	errs = append(errs, validateTags(label, t.Tags)...)
@@ -239,11 +245,7 @@ func validateHTTP(label string, h *HTTPConfig) []error {
 		errs = append(errs, fmt.Errorf("config: %s: http.expect.json needs a response body and cannot be used with method HEAD", label))
 	}
 
-	if h.TLS != nil && h.TLS.InsecureSkipVerify && strings.TrimSpace(h.TLS.CAFile) != "" {
-		errs = append(errs, fmt.Errorf("config: %s: http.tls.insecure_skip_verify and http.tls.ca_file are mutually exclusive", label))
-	}
-
-	errs = append(errs, validateTLSExpect(label, h.TLS)...)
+	errs = append(errs, validateTLSSettings(label, "http.tls", h.TLS)...)
 
 	if h.ResolvedMaxRedirects() < 0 {
 		errs = append(errs, fmt.Errorf("config: %s: http.max_redirects must not be negative", label))
@@ -283,16 +285,59 @@ func validateHTTP(label string, h *HTTPConfig) []error {
 	return errs
 }
 
-// validateTLSExpect validates a target's opt-in TLS expectations.
+// validateTLSSettings validates the TLS verification, connection and expectation
+// settings shared by the http.tls and tls blocks.
 //
 // Parameters:
 //   - label: the target label used in error messages.
-//   - t: the target's TLS block; nil or a block without expectations is valid.
+//   - prefix: the configuration path of the block ("http.tls" or "tls"), so an
+//     error names the key the operator actually wrote.
+//   - t: the block to validate; nil is valid and means "defaults".
 //
 // It returns one error per problem found, so a single run reports every issue
 // rather than only the first.
-func validateTLSExpect(label string, t *TLSConfig) []error {
-	if t == nil || t.Expect == nil {
+func validateTLSSettings(label, prefix string, t *TLSConfig) []error {
+	if t == nil {
+		return nil
+	}
+	var errs []error
+
+	if t.InsecureSkipVerify && strings.TrimSpace(t.CAFile) != "" {
+		errs = append(errs, fmt.Errorf("config: %s: %s.insecure_skip_verify and %s.ca_file are mutually exclusive", label, prefix, prefix))
+	}
+
+	// A client certificate is useless without its key and vice versa; accepting
+	// one alone would silently probe without the identity the operator intended.
+	certFile := strings.TrimSpace(t.CertFile)
+	keyFile := strings.TrimSpace(t.KeyFile)
+	if (certFile == "") != (keyFile == "") {
+		errs = append(errs, fmt.Errorf("config: %s: %s.cert_file and %s.key_file must be set together", label, prefix, prefix))
+	}
+
+	if v := strings.TrimSpace(t.MaxVersion); v != "" {
+		if _, err := tlsdiag.ParseVersion(v); err != nil {
+			errs = append(errs, fmt.Errorf("config: %s: %s.max_version: %v", label, prefix, err))
+		}
+	}
+
+	if t.ServerName != "" && strings.TrimSpace(t.ServerName) == "" {
+		errs = append(errs, fmt.Errorf("config: %s: %s.server_name must not be blank", label, prefix))
+	}
+
+	errs = append(errs, validateTLSExpect(label, prefix, t)...)
+	return errs
+}
+
+// validateTLSExpect validates a block's opt-in TLS expectations.
+//
+// Parameters:
+//   - label: the target label used in error messages.
+//   - prefix: the configuration path of the enclosing block.
+//   - t: the TLS block; a block without expectations is valid.
+//
+// It returns one error per problem found.
+func validateTLSExpect(label, prefix string, t *TLSConfig) []error {
+	if t.Expect == nil {
 		return nil
 	}
 	var errs []error
@@ -302,25 +347,55 @@ func validateTLSExpect(label string, t *TLSConfig) []error {
 	// they would be evaluated against a certificate nobody vouched for, which
 	// reads as a guarantee the configuration cannot give.
 	if t.InsecureSkipVerify {
-		errs = append(errs, fmt.Errorf("config: %s: http.tls.expect cannot be combined with http.tls.insecure_skip_verify", label))
+		errs = append(errs, fmt.Errorf("config: %s: %s.expect cannot be combined with %s.insecure_skip_verify", label, prefix, prefix))
 	}
 
 	if e.MinDaysRemaining < 0 {
-		errs = append(errs, fmt.Errorf("config: %s: http.tls.expect.min_days_remaining must not be negative", label))
+		errs = append(errs, fmt.Errorf("config: %s: %s.expect.min_days_remaining must not be negative", label, prefix))
 	}
 
 	if v := strings.TrimSpace(e.MinVersion); v != "" {
-		if _, err := tlsdiag.ParseVersion(v); err != nil {
-			errs = append(errs, fmt.Errorf("config: %s: http.tls.expect.min_version: %v", label, err))
+		minVersion, err := tlsdiag.ParseVersion(v)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("config: %s: %s.expect.min_version: %v", label, prefix, err))
+		} else if maxRaw := strings.TrimSpace(t.MaxVersion); maxRaw != "" {
+			// A floor above the ceiling can never be satisfied: the handshake
+			// would negotiate at most MaxVersion and the expectation would then
+			// fail every single run.
+			if maxVersion, merr := tlsdiag.ParseVersion(maxRaw); merr == nil && minVersion > maxVersion {
+				errs = append(errs, fmt.Errorf("config: %s: %s.expect.min_version %q is above %s.max_version %q, which can never be satisfied", label, prefix, v, prefix, maxRaw))
+			}
 		}
 	}
 
 	if r := strings.TrimSpace(e.IssuerRegex); r != "" {
 		if _, err := regexp.Compile(r); err != nil {
-			errs = append(errs, fmt.Errorf("config: %s: http.tls.expect.issuer_regex %q is not a valid regular expression: %v", label, r, err))
+			errs = append(errs, fmt.Errorf("config: %s: %s.expect.issuer_regex %q is not a valid regular expression: %v", label, prefix, r, err))
 		}
 	}
 
+	return errs
+}
+
+// validateTLSProbe validates a standalone tls block: a non-empty host, a port in
+// range, non-blank ALPN entries, plus the shared TLS settings.
+func validateTLSProbe(label string, t *TLSProbeConfig) []error {
+	var errs []error
+
+	if strings.TrimSpace(t.Host) == "" {
+		errs = append(errs, fmt.Errorf("config: %s: tls.host is required", label))
+	}
+	if t.Port < 1 || t.Port > 65535 {
+		errs = append(errs, fmt.Errorf("config: %s: tls.port %d must be a number in 1-65535", label, t.Port))
+	}
+
+	for i, proto := range t.ALPN {
+		if strings.TrimSpace(proto) == "" {
+			errs = append(errs, fmt.Errorf("config: %s: tls.alpn[%d] must not be empty", label, i))
+		}
+	}
+
+	errs = append(errs, validateTLSSettings(label, "tls", &t.TLSConfig)...)
 	return errs
 }
 

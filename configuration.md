@@ -167,7 +167,9 @@ targets:
 
 ## Target Definition
 
-A target represents one monitored endpoint.
+A target represents one monitored endpoint. It carries **exactly one** protocol
+block — `http`, `dns`, `tcp` or `tls` — and configuring two (or none) is a
+validation error.
 
 Example:
 
@@ -361,6 +363,56 @@ targets:
 - **Security note:** without verification a MITM presenting a certificate with
   the right hostname would be accepted (and any configured credentials sent to
   it), so `insecure_skip_verify` genuinely lowers security — prefer `ca_file`.
+
+---
+
+### Client certificates, SNI and version cap
+
+These three settings live in the same `tls:` block and work identically under
+`http.tls` and in a standalone `tls:` target.
+
+```
+targets:
+  - name: internal-api
+    http:
+      url: https://192.0.2.10/health
+      tls:
+        ca_file: /etc/sentinel/internal-ca.pem
+        cert_file: /etc/sentinel/sentinel-client.pem   # mutual TLS
+        key_file:  /etc/sentinel/sentinel-client.key
+        server_name: api.internal                      # SNI + name to validate
+        max_version: "1.2"                             # compatibility check
+```
+
+- **`cert_file` / `key_file`** present a client certificate when the server asks
+  for one. Both must be set together. The pair is read at startup, so a missing
+  or malformed file stops the process instead of failing mysteriously later.
+  Several targets sharing the same identity read it once.
+
+  **The certificate is treated as a credential.** Like custom headers and
+  `Authorization`, it is sent only to the target's own origin — a redirect to a
+  different host, port or scheme never receives it. Handing an identity to a
+  third party is precisely the leak the origin guard exists to prevent.
+
+- **`server_name`** sets the SNI name *and* the name the certificate must be
+  valid for. It is what makes the example above work at all: against an IP
+  address Go sends no SNI, so the server would answer with its default
+  certificate for a different name. This is curl's `--resolve` semantics.
+
+  It does not weaken verification — a name the certificate does not carry still
+  fails. With `follow_redirects` a cross-origin hop is validated against its own
+  real hostname, so the override cannot be used to make a foreign certificate
+  pass.
+
+- **`max_version`** (`"1.2"` or `"1.3"`) caps the highest version Sentinel
+  offers. Its purpose is the compatibility question: a target pinned to `"1.2"`
+  fails exactly when the server no longer serves TLS 1.2 clients. Point two
+  targets at the same endpoint with different caps to see the whole picture.
+
+  There is deliberately **no** matching `min_version` here —
+  `expect.min_version` already enforces a floor, and does so while still
+  reporting which version the server actually negotiated. Configuring a floor
+  above `max_version` is rejected: it could never be satisfied.
 
 ---
 
@@ -586,31 +638,75 @@ Planned metrics: packet loss, latency, jitter.
 
 ---
 
-## TLS Configuration (planned)
+## TLS Configuration
 
-> Not implemented **as a standalone protocol block**. For HTTPS targets TLS is
-> already inspected in depth — chain, negotiated version and cipher, certificate
-> identity, key strength and OCSP stapling (see *TLS verification* and *TLS
-> expectations* above, and `metrics.md` → *TLS Metrics*). What is missing is a
-> `tls:` target type for endpoints that are not HTTP: LDAPS (636), SMTPS (465),
-> MQTT over TLS (8883), or any bare TLS port. A top-level `tls:` block is
-> rejected as an unknown field. Planned shape:
+A `tls:` target checks any endpoint that speaks TLS **immediately on connect** —
+LDAPS (636), SMTPS (465), IMAPS (993), POP3S (995), MQTT over TLS (8883), or any
+bare TLS port. Such endpoints carry no HTTP to probe them with, while a `tcp:`
+target only sees that a connection opens and never the certificate behind it.
 
 ```
-tls:
-  host: ldap.example.org
-  port: 636
+targets:
+  - name: ldaps
+    tls:
+      host: ldap.example.org
+      port: 636
+      expect:
+        min_days_remaining: 21
 ```
 
-It would reuse the existing `internal/tlsdiag` inspection and therefore emit the
-identical `sentinel_tls_*` series — the collector is already
-protocol-independent. Chain validation and a minimum-remaining-days threshold are
-not part of that shape because they exist today as `tls.expect`
-(`min_days_remaining`) rather than as protocol-block options.
+The probe resolves the name, connects, completes the handshake, inspects the
+certificate, and closes. No application protocol is spoken afterwards.
 
-That probe is also where enumerating a server's *supported* TLS versions and
-cipher suites belongs: it needs several deliberately downgraded handshakes, which
-a probe that also has to measure request latency must not do.
+| Key | Meaning |
+|---|---|
+| `host` | hostname or IP address (required) |
+| `port` | TCP port, 1-65535 (required) |
+| `alpn` | application protocols to offer, most preferred first |
+| everything from *TLS verification* / *TLS expectations* | `ca_file`, `insecure_skip_verify`, `cert_file`/`key_file`, `server_name`, `max_version`, `expect` — written exactly as under `http.tls` |
+
+**Metrics.** A `tls:` target emits the complete `sentinel_tls_certificate_*`,
+`_chain_*`, `_version_info`, `_cipher_info`, `_alpn_info` and `_ocsp_*` set —
+the same series an HTTPS target produces, because both feed the same
+protocol-independent collector. In addition it gets three phase timings of its
+own: `sentinel_tls_dns_duration_seconds`, `_connect_duration_seconds` and
+`_handshake_duration_seconds`.
+
+**ALPN.** Offering protocols makes the negotiated one visible as
+`sentinel_tls_alpn_info{protocol="h2"}` — useful to check whether a load
+balancer really announces HTTP/2:
+
+```
+targets:
+  - name: lb-h2
+    tls:
+      host: lb.example.org
+      port: 443
+      alpn: ["h2", "http/1.1"]
+```
+
+**Name resolution.** Unlike a plain `net.Dial`, the probe resolves the name
+itself and then tries the returned addresses in order. That is what allows DNS
+and connect time to be reported separately — "slow to resolve" and "slow to
+connect" call for entirely different investigations. It also means there is no
+Happy Eyeballs (no parallel IPv4/IPv6 race): addresses are tried in sequence,
+which keeps each measurement attributable to one address and still survives a
+broken IPv6 path.
+
+### Not covered: STARTTLS
+
+Ports that begin in plaintext and upgrade on command (SMTP 587, IMAP 143,
+LDAP 389) are **not** supported. The upgrade needs a protocol-specific dialogue,
+which belongs with the mail and directory protocols on the roadmap rather than in
+a generic TLS check. Use the implicit-TLS port where one exists (465, 993, 636).
+
+### Not covered: cipher and version enumeration
+
+What a server *additionally* supports cannot be learned from one handshake.
+`max_version` gives a usable substitute for the common question: pin a second
+target to `"1.2"` and its success tells you whether a TLS 1.2 client still gets
+through. A full matrix would need several deliberately downgraded handshakes,
+which a probe that also measures latency must not do.
 
 ---
 

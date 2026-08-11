@@ -91,6 +91,26 @@ type Options struct {
 	// days, minimum version, OCSP stapling, issuer). Nil or empty enforces
 	// nothing, which is the default.
 	TLSPolicy *tlsdiag.Policy
+	// TLSClientCert is the client certificate presented when the server requests
+	// one (mutual TLS). Because it identifies Sentinel it is treated as a
+	// credential: it is sent only to the target's own origin, never to a
+	// redirect hop on a different origin.
+	TLSClientCert *tls.Certificate
+	// TLSServerName overrides the SNI name and the hostname the certificate is
+	// validated against. It applies to the target's own origin; a redirect to a
+	// different origin is validated against that hop's real host instead.
+	//
+	// The SNI value itself is connection-wide, so with follow_redirects a
+	// cross-origin hop would still receive this name. That combination fails
+	// closed — the foreign server's certificate will not match its real host —
+	// but it is not a meaningful configuration: server_name exists for probing a
+	// virtual host by IP or behind an SNI-routing load balancer, where redirects
+	// off-origin are not part of the picture.
+	TLSServerName string
+	// TLSMaxVersion caps the highest TLS version offered (a tls.VersionTLS*
+	// constant); zero means Go's default. It is connection-wide, which is safe
+	// because it can only ever restrict.
+	TLSMaxVersion uint16
 }
 
 // JSONCheck is one JSONPath assertion (raw path plus an optional expected scalar
@@ -115,20 +135,23 @@ type Prober struct {
 	basicPass       string
 	bearerToken     string
 	body            string
-	tlsSkipVerify   bool            // operator's opt-out; applied to the target's own origin only
-	tlsRoots        *x509.CertPool  // operator's CA (nil = system); applied to the target's origin only
-	tlsPolicy       *tlsdiag.Policy // opt-in expectations; applied to the target's origin only
-	origin          string          // canonical scheme://host:port of the target URL
+	tlsSkipVerify   bool             // operator's opt-out; applied to the target's own origin only
+	tlsRoots        *x509.CertPool   // operator's CA (nil = system); applied to the target's origin only
+	tlsPolicy       *tlsdiag.Policy  // opt-in expectations; applied to the target's origin only
+	tlsClientCert   *tls.Certificate // client identity; applied to the target's origin only
+	tlsServerName   string           // SNI / verification name override for the target's origin
+	origin          string           // canonical scheme://host:port of the target URL
 	validators      []validator.Validator
 	transport       *http.Transport
 
 	// Per-hop TLS state, set before each RoundTrip and read by verifyConnection
-	// during the (synchronous, same-goroutine) handshake. A Prober only ever runs
-	// one probe at a time (the scheduler's skip-if-running), and hops within a run
+	// and clientCertificate during the handshake. A Prober only ever runs one
+	// probe at a time (the scheduler's skip-if-running), and hops within a run
 	// are sequential, so these need no synchronisation.
 	tlsHost       string
 	hopRoots      *x509.CertPool
 	hopSkipVerify bool
+	hopSameOrigin bool
 	tlsInfo       *tlsdiag.Info
 	tlsReason     probe.FailureReason
 }
@@ -166,14 +189,43 @@ func New(opts Options) (*Prober, error) {
 		tlsSkipVerify:   opts.TLSSkipVerify,
 		tlsRoots:        opts.TLSRoots,
 		tlsPolicy:       opts.TLSPolicy,
+		tlsClientCert:   opts.TLSClientCert,
+		tlsServerName:   strings.TrimSpace(opts.TLSServerName),
 		origin:          originKey(opts.URL),
 		validators:      validators,
 	}
 	// The transport verifies the certificate during the handshake via
 	// p.verifyConnection, so an untrusted certificate aborts before any request
 	// (and its credentials) is sent.
-	p.transport = newTransport(p.verifyConnection)
+	p.transport = newTransport(transportConfig{
+		verify:            p.verifyConnection,
+		clientCertificate: p.clientCertificate,
+		serverName:        p.tlsServerName,
+		maxVersion:        opts.TLSMaxVersion,
+	})
 	return p, nil
+}
+
+// clientCertificate supplies the configured client identity during the TLS
+// handshake, but only when the current hop is the target's own origin.
+//
+// A client certificate proves who Sentinel is; handing it to a redirect target on
+// another origin would disclose that identity to a third party — the same leak
+// class the origin guard already closes for custom headers and Authorization.
+// Returning an empty tls.Certificate is how crypto/tls is told "I have none",
+// which lets the server decide whether to proceed or reject the handshake.
+//
+// Parameters:
+//   - _: the server's certificate request; the acceptable CAs are not filtered
+//     on, because a target configures exactly one identity and letting the
+//     server's hint suppress it would only produce a confusing silent failure.
+//
+// It never returns an error: refusing to authenticate is not a probe error.
+func (p *Prober) clientCertificate(_ *tls.CertificateRequestInfo) (*tls.Certificate, error) {
+	if p.tlsClientCert == nil || !p.hopSameOrigin {
+		return &tls.Certificate{}, nil
+	}
+	return p.tlsClientCert, nil
 }
 
 // verifyConnection runs during the TLS handshake (before any request is sent).
@@ -346,15 +398,25 @@ func (p *Prober) run(ctx context.Context) (*Diagnostics, probe.Timings, probe.Fa
 			p.applyRequestHeaders(req, bodyStr != "")
 		}
 
-		// The operator's TLS policy (skip-verify / custom CA) applies only to the
-		// target's own origin. A redirect to a different origin is always verified
-		// against the system roots, so skip-verify cannot be inherited by a
-		// third-party hop and a custom CA cannot wrongly reject a public one.
+		// The operator's TLS settings (skip-verify, custom CA, client identity,
+		// server_name) apply only to the target's own origin. A redirect to a
+		// different origin is always verified against the system roots and
+		// against its own hostname, so skip-verify cannot be inherited by a
+		// third-party hop, a custom CA cannot wrongly reject a public one, and
+		// the client certificate is never disclosed off-origin.
+		p.hopSameOrigin = sameOrigin
 		p.tlsHost = hostname(current)
 		p.hopSkipVerify = sameOrigin && p.tlsSkipVerify
 		p.hopRoots = nil
 		if sameOrigin {
 			p.hopRoots = p.tlsRoots
+			// server_name replaces the name the certificate must be valid for —
+			// the point of the option is probing a virtual host by IP or behind
+			// an SNI-routing balancer, where the connect address is not the name
+			// the certificate carries.
+			if p.tlsServerName != "" {
+				p.tlsHost = p.tlsServerName
+			}
 		}
 		p.tlsInfo = nil
 		p.tlsReason = probe.ReasonNone
@@ -371,7 +433,7 @@ func (p *Prober) run(ctx context.Context) (*Diagnostics, probe.Timings, probe.Fa
 				diag.FinalURL = current
 				return diag, timings, p.tlsReason
 			}
-			return diag, timings, classifyError(err)
+			return diag, timings, probe.ClassifyNetworkError(err)
 		}
 
 		// Capture certificate diagnostics from the (accepted) handshake. For a
@@ -436,7 +498,7 @@ func (p *Prober) run(ctx context.Context) (*Diagnostics, probe.Timings, probe.Fa
 		timings = tr.timings(downloadEnd)
 
 		if readErr != nil {
-			return diag, timings, classifyError(readErr)
+			return diag, timings, probe.ClassifyNetworkError(readErr)
 		}
 
 		// TLS was already inspected above (per-hop), so a bad certificate has
