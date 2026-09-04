@@ -26,7 +26,12 @@ func Load(path string) (*Config, error) {
 
 	cfg, err := Parse(data)
 	if err != nil {
-		return nil, err
+		// Parse has no notion of a path (it is also used on in-memory documents),
+		// so name the file here. This error is the last thing an operator sees
+		// before the process exits; without the path they cannot tell which of
+		// several mounted or templated config files is at fault. The read error
+		// above already names it, and the two must not disagree.
+		return nil, fmt.Errorf("config: %q: %w", path, err)
 	}
 
 	cfg.applyDefaults()

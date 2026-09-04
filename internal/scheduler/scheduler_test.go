@@ -1,14 +1,19 @@
 package scheduler
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"bodsch.me/sentinel/internal/clock"
+	"bodsch.me/sentinel/internal/logging"
 	"bodsch.me/sentinel/internal/probe"
 	"bodsch.me/sentinel/internal/store"
 )
@@ -337,7 +342,15 @@ func TestExecuteDiscardsWhenCancelledDuringProbe(t *testing.T) {
 
 	eventually(t, func() bool { return p.calls.Load() == 1 }, time.Second) // probe in flight
 	cancel()                                                               // cancel mid-probe
-	<-done
+	// Deadline, not a bare receive: if execute() stopped honouring the cancel it
+	// would block here and hang the whole package's test run instead of naming
+	// the regression.
+	select {
+	case <-done:
+	case <-time.After(4 * time.Second):
+		t.Fatal("execute did not return after the context was cancelled mid-probe; " +
+			"a shutdown would block on the scheduler drain until the 10s timeout fires")
+	}
 
 	if st.Len() != 0 {
 		t.Fatalf("expected the in-flight result to be discarded, got %d stored", st.Len())
@@ -362,5 +375,168 @@ func TestProbePanicDoesNotCrash(t *testing.T) {
 
 	if j.running.Load() {
 		t.Error("running flag was not reset after a panicking probe")
+	}
+}
+
+// logLines decodes the JSON log records written to buf.
+func logLines(t *testing.T, buf *bytes.Buffer) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("log line is not JSON: %q: %v", line, err)
+		}
+		out = append(out, rec)
+	}
+	return out
+}
+
+// newLoggingScheduler returns a scheduler logging JSON at debug into buf.
+func newLoggingScheduler(t *testing.T, st *store.Store) (*Scheduler, *bytes.Buffer) {
+	t.Helper()
+	var buf bytes.Buffer
+	s := New(Options{
+		Store:       st,
+		Concurrency: 10,
+		Logger:      logging.New(&buf, logging.Options{Level: slog.LevelDebug, Format: logging.FormatJSON}),
+	})
+	return s, &buf
+}
+
+// TestLogResultCarriesTheCoreFieldSet verifies the field schema the logging
+// package documents actually reaches a probe line. These fields are how an
+// operator finds one target's history in a fleet-wide stream and how a log-based
+// alert filters failures; a probe line missing "target" is unattributable, and a
+// second spelling of "duration_ms" splits every dashboard built on it in half.
+func TestLogResultCarriesTheCoreFieldSet(t *testing.T) {
+	t.Parallel()
+
+	st := store.New()
+	s, buf := newLoggingScheduler(t, st)
+	j := &job{spec: JobSpec{Name: "api-prod", Type: "http", Prober: &fakeProber{
+		result: probe.Result{Success: false, FailureReason: probe.ReasonTimeout, Duration: 1500 * time.Millisecond},
+	}}}
+
+	s.execute(context.Background(), j)
+
+	recs := logLines(t, buf)
+	if len(recs) != 1 {
+		t.Fatalf("got %d log records, want 1: %q", len(recs), buf.String())
+	}
+	rec := recs[0]
+	if rec[logging.FieldTarget] != "api-prod" {
+		t.Errorf("%s = %v, want \"api-prod\"", logging.FieldTarget, rec[logging.FieldTarget])
+	}
+	if rec[logging.FieldProbeType] != "http" {
+		t.Errorf("%s = %v, want \"http\"", logging.FieldProbeType, rec[logging.FieldProbeType])
+	}
+	if rec[logging.FieldSuccess] != false {
+		t.Errorf("%s = %v, want false", logging.FieldSuccess, rec[logging.FieldSuccess])
+	}
+	if got, ok := rec[logging.FieldDurationMs].(float64); !ok || got != 1500 {
+		t.Errorf("%s = %v (%T), want 1500", logging.FieldDurationMs, rec[logging.FieldDurationMs], rec[logging.FieldDurationMs])
+	}
+	if rec[logging.FieldFailureReason] != probe.ReasonTimeout.String() {
+		t.Errorf("%s = %v, want %q", logging.FieldFailureReason, rec[logging.FieldFailureReason], probe.ReasonTimeout)
+	}
+}
+
+// TestLogResultOmitsFailureReasonOnSuccess is the other half of the schema
+// decision: failure_reason lives at the call site precisely so a success line
+// does not carry it. A success line stamped with failure_reason="none" would
+// make `failure_reason!=""` — the obvious way to select failures in a log query
+// — match every single probe line, and a log-based alert built on it would fire
+// permanently.
+func TestLogResultOmitsFailureReasonOnSuccess(t *testing.T) {
+	t.Parallel()
+
+	st := store.New()
+	s, buf := newLoggingScheduler(t, st)
+	j := &job{spec: JobSpec{Name: "api-prod", Type: "http", Prober: &fakeProber{
+		result: probe.Result{Success: true, Duration: 20 * time.Millisecond},
+	}}}
+
+	s.execute(context.Background(), j)
+
+	recs := logLines(t, buf)
+	if len(recs) != 1 {
+		t.Fatalf("got %d log records, want 1: %q", len(recs), buf.String())
+	}
+	if _, present := recs[0][logging.FieldFailureReason]; present {
+		t.Errorf("a successful probe line carries %s = %v, want the field absent",
+			logging.FieldFailureReason, recs[0][logging.FieldFailureReason])
+	}
+}
+
+// TestSteadyStateLogsOnlyTheTransition is the promise in logResult's own doc
+// comment: a target that stays down logs once, on the transition, not on every
+// run. It is a load promise, not a cosmetic one — a 1000-target fleet in a
+// regional outage probing every 15s would otherwise emit 4000 info lines a
+// minute, saturating the log pipeline at exactly the moment the transition lines
+// are the only thing worth reading, and the recovery line would be buried in
+// them.
+func TestSteadyStateLogsOnlyTheTransition(t *testing.T) {
+	t.Parallel()
+
+	st := store.New()
+	s, buf := newLoggingScheduler(t, st)
+	p := &fakeProber{result: probe.Result{Success: false, FailureReason: probe.ReasonTimeout}}
+	j := &job{spec: JobSpec{Name: "api-prod", Type: "http", Prober: p}}
+
+	// Four consecutive failing runs, then two successful ones.
+	for i := 0; i < 4; i++ {
+		s.execute(context.Background(), j)
+	}
+	p.result = probe.Result{Success: true}
+	for i := 0; i < 2; i++ {
+		s.execute(context.Background(), j)
+	}
+
+	var infoMsgs []string
+	for _, rec := range logLines(t, buf) {
+		if rec["level"] == "INFO" {
+			infoMsgs = append(infoMsgs, rec["msg"].(string))
+		}
+	}
+
+	want := []string{"probe failing", "probe recovered"}
+	if len(infoMsgs) != len(want) {
+		t.Fatalf("got %d info lines %v across 4 failures + 2 successes, want exactly %v "+
+			"(one per state transition)", len(infoMsgs), infoMsgs, want)
+	}
+	for i := range want {
+		if infoMsgs[i] != want[i] {
+			t.Errorf("info line %d = %q, want %q", i, infoMsgs[i], want[i])
+		}
+	}
+}
+
+// TestFirstRunOfAFailingTargetLogsAtInfo pins the cold-start case. On startup no
+// record exists yet, so the first result is a transition by definition. If a
+// target that was already broken when Sentinel started logged its failure only
+// at debug, a restart during an outage would produce no info-level evidence that
+// the target was down — the very thing an operator greps for after a restart.
+func TestFirstRunOfAFailingTargetLogsAtInfo(t *testing.T) {
+	t.Parallel()
+
+	st := store.New()
+	s, buf := newLoggingScheduler(t, st)
+	j := &job{spec: JobSpec{Name: "api-prod", Type: "http", Prober: &fakeProber{
+		result: probe.Result{Success: false, FailureReason: probe.ReasonConnectionRefused},
+	}}}
+
+	s.execute(context.Background(), j)
+
+	recs := logLines(t, buf)
+	if len(recs) != 1 {
+		t.Fatalf("got %d log records, want 1: %q", len(recs), buf.String())
+	}
+	if recs[0]["level"] != "INFO" || recs[0]["msg"] != "probe failing" {
+		t.Errorf("first-ever result of a failing target logged as %v %q, want INFO \"probe failing\"",
+			recs[0]["level"], recs[0]["msg"])
 	}
 }

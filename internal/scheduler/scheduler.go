@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"bodsch.me/sentinel/internal/clock"
+	"bodsch.me/sentinel/internal/logging"
 	"bodsch.me/sentinel/internal/probe"
 	"bodsch.me/sentinel/internal/store"
 )
@@ -197,7 +198,7 @@ func (s *Scheduler) tick(ctx context.Context, j *job) {
 		defer func() {
 			if r := recover(); r != nil {
 				s.logger.Error("probe panicked",
-					slog.String("target", j.spec.Name),
+					slog.String(logging.FieldTarget, j.spec.Name),
 					slog.Any("panic", r),
 				)
 			}
@@ -254,22 +255,25 @@ func (s *Scheduler) execute(ctx context.Context, j *job) {
 // logResult logs state transitions at info and steady state at debug. A target
 // that stays down therefore logs once (on the transition), not on every run —
 // the current state lives in the metrics; the log is for diagnosing changes.
+//
+// The core field set comes from the logging package rather than being spelled
+// out here, so every probe line carries the same field names.
 func (s *Scheduler) logResult(j *job, result probe.Result, changed bool) {
-	logger := s.logger.With(
-		slog.String("target", j.spec.Name),
-		slog.String("probe_type", j.spec.Type),
-		slog.Bool("success", result.Success),
-		slog.Int64("duration_ms", result.Duration.Milliseconds()),
+	logger := logging.WithResult(
+		logging.WithProbe(s.logger, j.spec.Name, j.spec.Type),
+		result.Success,
+		result.Duration,
 	)
+	reason := slog.String(logging.FieldFailureReason, result.FailureReason.String())
 	switch {
 	case changed && result.Success:
 		logger.Info("probe recovered")
 	case changed && !result.Success:
-		logger.Info("probe failing", slog.String("failure_reason", result.FailureReason.String()))
+		logger.Info("probe failing", reason)
 	case result.Success:
 		logger.Debug("probe succeeded")
 	default:
-		logger.Debug("probe still failing", slog.String("failure_reason", result.FailureReason.String()))
+		logger.Debug("probe still failing", reason)
 	}
 }
 
