@@ -100,6 +100,13 @@ release: ## Cross-compile static release binaries into dist/.
 		GOOS=$$os GOARCH=$$arch $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o $$out $(CMD_PKG) || exit 1; \
 	done
 
+# The Grafana dashboard is generated, not edited: contrib/grafana/*.json is the
+# output of this script, and checked in so that nobody needs Python to import
+# it. Standard library only.
+.PHONY: dashboards
+dashboards: ## Regenerate the Grafana dashboard in contrib/grafana (needs python3).
+	python3 -I contrib/grafana/generate.py
+
 .PHONY: clean
 clean: ## Remove build artefacts.
 	rm -rf $(BIN_DIR) $(DIST_DIR) coverage.out
