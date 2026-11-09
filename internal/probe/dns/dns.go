@@ -28,8 +28,8 @@ const defaultPort = "53"
 
 // typeCodes maps supported record-type names to their miekg/dns codes.
 var typeCodes = map[string]uint16{
-	"A":    dnslib.TypeA,
-	"AAAA": dnslib.TypeAAAA,
+	"A":     dnslib.TypeA,
+	"AAAA":  dnslib.TypeAAAA,
 	"MX":    dnslib.TypeMX,
 	"TXT":   dnslib.TypeTXT,
 	"CNAME": dnslib.TypeCNAME,
