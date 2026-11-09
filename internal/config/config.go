@@ -75,10 +75,11 @@ type Defaults struct {
 // distinguish "unset" (nil) from an explicit value, so a target can override a
 // true default with false.
 type HTTPDefaults struct {
-	Method          string `yaml:"method"`
-	FollowRedirects *bool  `yaml:"follow_redirects"`
-	MaxRedirects    *int   `yaml:"max_redirects"`
-	MaxBodyBytes    *int64 `yaml:"max_body_bytes"`
+	Method                string `yaml:"method"`
+	FollowRedirects       *bool  `yaml:"follow_redirects"`
+	MaxRedirects          *int   `yaml:"max_redirects"`
+	MaxBodyBytes          *int64 `yaml:"max_body_bytes"`
+	BlockPrivateRedirects *bool  `yaml:"block_private_redirects"`
 }
 
 // Target is one monitored endpoint. Exactly one protocol block must be present.
@@ -117,6 +118,11 @@ type HTTPConfig struct {
 	FollowRedirects *bool  `yaml:"follow_redirects"`
 	MaxRedirects    *int   `yaml:"max_redirects"`
 	MaxBodyBytes    *int64 `yaml:"max_body_bytes"`
+	// BlockPrivateRedirects refuses to follow a redirect to a different host
+	// whose resolved address is private, loopback or link-local (failure reason
+	// redirect_blocked). Opt-in; redirects within the target's own host are
+	// always followed.
+	BlockPrivateRedirects *bool `yaml:"block_private_redirects"`
 	// Headers are request headers sent with the probe (distinct from
 	// Expect.Headers, which validate the response). "Host" sets the request host.
 	// For security they are sent only to the target's own host, not carried across
@@ -330,6 +336,12 @@ func (h *HTTPConfig) ResolvedMaxRedirects() int {
 		return defaultMaxRedirects
 	}
 	return *h.MaxRedirects
+}
+
+// ResolvedBlockPrivateRedirects reports the effective egress-guard setting,
+// defaulting to false (opt-in) when unset.
+func (h *HTTPConfig) ResolvedBlockPrivateRedirects() bool {
+	return h.BlockPrivateRedirects != nil && *h.BlockPrivateRedirects
 }
 
 // ResolvedMaxBodyBytes reports the effective body-size cap in bytes. When unset

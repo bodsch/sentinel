@@ -37,6 +37,11 @@ const (
 	// version, required OCSP stapling, expected issuer).
 	ReasonTLSPolicyViolation FailureReason = "tls_policy_violation"
 
+	// ReasonRedirectBlocked means a redirect pointed to a different host whose
+	// address is private, loopback or link-local, and the target opted into
+	// http.block_private_redirects. The redirect was not followed.
+	ReasonRedirectBlocked FailureReason = "redirect_blocked"
+
 	// ReasonNetworkError is the catch-all for network-level failures that do
 	// not fit a more specific reason above. It exists so the probe never has to
 	// silently misclassify an unusual error.
@@ -56,6 +61,7 @@ var allReasons = map[FailureReason]struct{}{
 	ReasonRedirectLoop:        {},
 	ReasonRedirectLimit:       {},
 	ReasonDowngrade:           {},
+	ReasonRedirectBlocked:     {},
 	ReasonHTTPStatusError:     {},
 	ReasonValidationFailed:    {},
 	ReasonTimeout:             {},

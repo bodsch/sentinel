@@ -125,6 +125,9 @@ func applyHTTPDefaults(h *HTTPConfig, d HTTPDefaults) {
 	if h.MaxBodyBytes == nil {
 		h.MaxBodyBytes = clonePtr(d.MaxBodyBytes)
 	}
+	if h.BlockPrivateRedirects == nil {
+		h.BlockPrivateRedirects = clonePtr(d.BlockPrivateRedirects)
+	}
 }
 
 // clonePtr returns a pointer to a copy of *p, or nil if p is nil. It prevents

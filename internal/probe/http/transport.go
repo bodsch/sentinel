@@ -29,6 +29,9 @@ import (
 //     certificate identifies Sentinel and is therefore a credential, so it must
 //     obey the same origin guard as headers and auth. The callback is consulted
 //     per handshake and returns the identity only for the target's own origin.
+//   - DialContext goes through guardedDialer, which enforces the opt-in
+//     block_private_redirects guard on the resolved address of a redirect hop
+//     (see egress.go). Requests without a guard dial unchanged.
 //   - ServerName and MaxVersion are connection-wide (the transport shares one
 //     tls.Config across hops and mutating it per hop would race the dial
 //     goroutine). MaxVersion is only ever more restrictive, so that is harmless;
@@ -40,7 +43,7 @@ func newTransport(cfg transportConfig) *http.Transport {
 	}
 	return &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           dialer.DialContext,
+		DialContext:           guardedDialer(dialer),
 		DisableKeepAlives:     true,
 		TLSHandshakeTimeout:   safetyTLSTimeout,
 		ExpectContinueTimeout: 1 * time.Second,

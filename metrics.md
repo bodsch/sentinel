@@ -222,6 +222,8 @@ redirect_limit_exceeded
 
 downgrade
 
+redirect_blocked
+
 http_status_error
 
 validation_failed

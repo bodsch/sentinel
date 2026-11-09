@@ -17,9 +17,12 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"strings"
@@ -111,6 +114,12 @@ type Options struct {
 	// constant); zero means Go's default. It is connection-wide, which is safe
 	// because it can only ever restrict.
 	TLSMaxVersion uint16
+	// BlockPrivateRedirects refuses to follow a redirect to a different host
+	// whose address is private, loopback or link-local; the probe then fails
+	// with redirect_blocked. It closes the blind-SSRF path where a monitored
+	// target steers the probe towards internal hosts. Redirects within the
+	// target's own host are always followed, whatever its address.
+	BlockPrivateRedirects bool
 }
 
 // JSONCheck is one JSONPath assertion (raw path plus an optional expected scalar
@@ -135,12 +144,15 @@ type Prober struct {
 	basicPass       string
 	bearerToken     string
 	body            string
-	tlsSkipVerify   bool             // operator's opt-out; applied to the target's own origin only
-	tlsRoots        *x509.CertPool   // operator's CA (nil = system); applied to the target's origin only
-	tlsPolicy       *tlsdiag.Policy  // opt-in expectations; applied to the target's origin only
-	tlsClientCert   *tls.Certificate // client identity; applied to the target's origin only
-	tlsServerName   string           // SNI / verification name override for the target's origin
-	origin          string           // canonical scheme://host:port of the target URL
+	tlsSkipVerify   bool                  // operator's opt-out; applied to the target's own origin only
+	tlsRoots        *x509.CertPool        // operator's CA (nil = system); applied to the target's origin only
+	tlsPolicy       *tlsdiag.Policy       // opt-in expectations; applied to the target's origin only
+	tlsClientCert   *tls.Certificate      // client identity; applied to the target's origin only
+	tlsServerName   string                // SNI / verification name override for the target's origin
+	origin          string                // canonical scheme://host:port of the target URL
+	targetHost      string                // canonical host of the target URL, for the egress guard
+	blockedAddr     func(netip.Addr) bool // egress guard predicate; nil when the guard is off
+	resolver        *net.Resolver         // used for the proxied-hop fallback check
 	validators      []validator.Validator
 	transport       *http.Transport
 
@@ -195,7 +207,12 @@ func New(opts Options) (*Prober, error) {
 		tlsClientCert:   opts.TLSClientCert,
 		tlsServerName:   strings.TrimSpace(opts.TLSServerName),
 		origin:          originKey(opts.URL),
+		targetHost:      hostKey(opts.URL),
+		resolver:        net.DefaultResolver,
 		validators:      validators,
+	}
+	if opts.BlockPrivateRedirects {
+		p.blockedAddr = isPrivateAddr
 	}
 	// The transport verifies the certificate during the handshake via
 	// p.verifyConnection, so an untrusted certificate aborts before any request
@@ -433,8 +450,19 @@ func (p *Prober) run(ctx context.Context) (*Diagnostics, probe.Timings, probe.Fa
 		p.hopTrace = tr
 		req = req.WithContext(traceContext(req.Context(), tr))
 
+		guarded, blocked := p.guardHop(req, len(diag.Redirects) > 0)
+		if blocked {
+			diag.FinalURL = current
+			return diag, timings, probe.ReasonRedirectBlocked
+		}
+		req = guarded
+
 		resp, err := p.transport.RoundTrip(req)
 		if err != nil {
+			if errors.Is(err, errRedirectBlocked) {
+				diag.FinalURL = current
+				return diag, timings, probe.ReasonRedirectBlocked
+			}
 			// verifyConnection rejected the certificate during the handshake (so no
 			// request/credentials were sent): surface the cert diagnostics + reason.
 			if p.tlsReason != probe.ReasonNone && p.tlsInfo != nil {
@@ -543,6 +571,31 @@ func (p *Prober) run(ctx context.Context) (*Diagnostics, probe.Timings, probe.Fa
 
 		return diag, timings, probe.ReasonNone
 	}
+}
+
+// guardHop applies the opt-in egress guard to one request.
+//
+// Only redirect hops to a different host are guarded: the target itself and
+// redirects within its own host are what the operator configured, and an
+// internal target is entirely legitimate. For a direct connection the guard is
+// attached to the request context and enforced by the dialer on the resolved
+// address. A proxied request never dials the hop's host itself, so its host is
+// resolved and checked up front instead (best effort).
+//
+// Parameters:
+//   - req: the hop's request.
+//   - isRedirect: true for every hop after the initial request.
+//
+// It returns the request to send (possibly carrying the guard) and true when
+// the hop is to be refused without sending it.
+func (p *Prober) guardHop(req *http.Request, isRedirect bool) (*http.Request, bool) {
+	if p.blockedAddr == nil || !isRedirect || hostKey(req.URL.String()) == p.targetHost {
+		return req, false
+	}
+	if proxyURL, err := p.transport.Proxy(req); err == nil && proxyURL != nil {
+		return req, anyResolvesBlocked(req.Context(), p.resolver, req.URL.Hostname(), p.blockedAddr)
+	}
+	return req.WithContext(withEgressGuard(req.Context(), p.blockedAddr)), false
 }
 
 // readCapped reads at most max bytes from r. Bytes beyond the cap are left on
