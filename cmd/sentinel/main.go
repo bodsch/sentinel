@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -403,9 +404,23 @@ func httpOptions(target config.Target, caPools map[string]*x509.CertPool, client
 		BearerToken:     h.BearerToken,
 		Body:            h.Body,
 	}
+	if path := strings.TrimSpace(h.BearerTokenFile); path != "" {
+		token, err := readSecretFile(path)
+		if err != nil {
+			return opts, fmt.Errorf("http target %q: http.bearer_token_file: %w", target.Name, err)
+		}
+		opts.BearerToken = token
+	}
 	if h.BasicAuth != nil {
 		opts.BasicAuthUser = h.BasicAuth.Username
 		opts.BasicAuthPass = h.BasicAuth.Password
+		if path := strings.TrimSpace(h.BasicAuth.PasswordFile); path != "" {
+			password, err := readSecretFile(path)
+			if err != nil {
+				return opts, fmt.Errorf("http target %q: http.basic_auth.password_file: %w", target.Name, err)
+			}
+			opts.BasicAuthPass = password
+		}
 	}
 	if h.TLS != nil {
 		settings, err := tlsSettings(h.TLS, caPools, clientCerts)
@@ -474,6 +489,43 @@ func loadCAPool(path string, cache map[string]*x509.CertPool) (*x509.CertPool, e
 	}
 	cache[path] = pool
 	return pool, nil
+}
+
+// maxSecretFileBytes bounds how much of a secret file is read. Credentials are
+// short; the cap keeps a mistyped path (a log file, /dev/zero) from being loaded
+// into memory whole.
+const maxSecretFileBytes = 64 << 10
+
+// readSecretFile reads a credential from path, as used by password_file and
+// bearer_token_file. Reading happens once at startup, so a missing or empty file
+// is a startup error instead of a target that fails authentication for hours.
+//
+// Parameters:
+//   - path: the operator-configured file path.
+//
+// It returns the content with surrounding whitespace trimmed (a trailing newline
+// from `echo` or a Kubernetes secret must not become part of the credential). It
+// returns an error when the file cannot be read, exceeds maxSecretFileBytes, or
+// is empty after trimming. The error never contains the file's content.
+func readSecretFile(path string) (string, error) {
+	f, err := os.Open(path) //nolint:gosec // G304: secret files are operator-supplied config paths.
+	if err != nil {
+		return "", fmt.Errorf("reading %q: %w", path, err)
+	}
+	defer func() { _ = f.Close() }()
+
+	data, err := io.ReadAll(io.LimitReader(f, maxSecretFileBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("reading %q: %w", path, err)
+	}
+	if len(data) > maxSecretFileBytes {
+		return "", fmt.Errorf("%q is larger than %d bytes", path, maxSecretFileBytes)
+	}
+	secret := strings.TrimSpace(string(data))
+	if secret == "" {
+		return "", fmt.Errorf("%q is empty", path)
+	}
+	return secret, nil
 }
 
 // jsonChecks maps config JSONPath assertions to HTTP prober checks.

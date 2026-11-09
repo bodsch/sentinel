@@ -125,6 +125,10 @@ type HTTPConfig struct {
 	BasicAuth *BasicAuth `yaml:"basic_auth"`
 	// BearerToken adds an "Authorization: Bearer <token>" header.
 	BearerToken string `yaml:"bearer_token"`
+	// BearerTokenFile names a file holding the bearer token, so the secret need
+	// not live in the configuration. It is read once at startup (surrounding
+	// whitespace trimmed) and is mutually exclusive with BearerToken.
+	BearerTokenFile string `yaml:"bearer_token_file"`
 	// Body is the request body sent with the initial request (typically with
 	// POST/PUT/PATCH). Set its Content-Type via Headers. Redirects are followed
 	// as GET without a body.
@@ -199,6 +203,10 @@ type TLSExpect struct {
 type BasicAuth struct {
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
+	// PasswordFile names a file holding the password, so the secret need not live
+	// in the configuration. It is read once at startup (surrounding whitespace
+	// trimmed) and is mutually exclusive with Password.
+	PasswordFile string `yaml:"password_file"`
 }
 
 // Expect declares the response validations a target must satisfy. A zero Status

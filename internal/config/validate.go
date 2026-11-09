@@ -400,9 +400,14 @@ func validateTLSProbe(label string, t *TLSProbeConfig) []error {
 }
 
 // validateHTTPAuth validates request headers and the authentication settings:
-// non-empty header keys, a username when basic_auth is present, and mutual
-// exclusivity between basic_auth, bearer_token and an explicit Authorization
-// request header (all three would set the same header).
+// non-empty header keys, a username when basic_auth is present, at most one
+// source per secret (inline value or file), and mutual exclusivity between
+// basic_auth, bearer_token(_file) and an explicit Authorization request header
+// (all of them would set the same header).
+//
+// Secret files are deliberately not opened here: validation must run in a CI
+// dry-run (--validate) where the secrets are not present. They are read at
+// startup, where a missing or empty file stops the process.
 func validateHTTPAuth(h *HTTPConfig, label string) []error {
 	var errs []error
 
@@ -417,8 +422,19 @@ func validateHTTPAuth(h *HTTPConfig, label string) []error {
 		}
 	}
 
-	if h.BasicAuth != nil && strings.TrimSpace(h.BasicAuth.Username) == "" {
-		errs = append(errs, fmt.Errorf("config: %s: http.basic_auth.username is required", label))
+	if h.BasicAuth != nil {
+		if strings.TrimSpace(h.BasicAuth.Username) == "" {
+			errs = append(errs, fmt.Errorf("config: %s: http.basic_auth.username is required", label))
+		}
+		if h.BasicAuth.Password != "" && strings.TrimSpace(h.BasicAuth.PasswordFile) != "" {
+			errs = append(errs, fmt.Errorf("config: %s: http.basic_auth.password and password_file are mutually exclusive", label))
+		}
+	}
+
+	hasToken := strings.TrimSpace(h.BearerToken) != ""
+	hasTokenFile := strings.TrimSpace(h.BearerTokenFile) != ""
+	if hasToken && hasTokenFile {
+		errs = append(errs, fmt.Errorf("config: %s: http.bearer_token and bearer_token_file are mutually exclusive", label))
 	}
 
 	// Count the sources that would set the Authorization header.
@@ -426,14 +442,14 @@ func validateHTTPAuth(h *HTTPConfig, label string) []error {
 	if h.BasicAuth != nil {
 		sources++
 	}
-	if strings.TrimSpace(h.BearerToken) != "" {
+	if hasToken || hasTokenFile {
 		sources++
 	}
 	if hasAuthHeader {
 		sources++
 	}
 	if sources > 1 {
-		errs = append(errs, fmt.Errorf("config: %s: at most one of http.basic_auth, http.bearer_token or an Authorization header may be set", label))
+		errs = append(errs, fmt.Errorf("config: %s: at most one of http.basic_auth, http.bearer_token(_file) or an Authorization header may be set", label))
 	}
 
 	return errs

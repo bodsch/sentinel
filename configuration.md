@@ -323,10 +323,26 @@ Rules:
 - **Security:** request headers and credentials are sent **only to the target's
   own host**. If the probe follows a redirect to a *different* host, they are
   dropped on that hop, so credentials never leak to a third party.
-- **Secrets** are given inline here. Protect the config file's permissions
-  accordingly. Reading secrets from a file or environment variable
-  (`password_file` / `bearer_token_file`) is a planned enhancement — see
-  `Roadmap.md`.
+- **Secrets** can be given inline (as above) or read from a file, so the
+  credential need not live in the configuration:
+
+  ```
+  basic_auth:
+    username: monitor
+    password_file: /run/secrets/api-password
+  ```
+
+  ```
+  bearer_token_file: /run/secrets/api-token
+  ```
+
+  `password_file` is mutually exclusive with `password`, `bearer_token_file`
+  with `bearer_token`. The file is read **once at startup**; surrounding
+  whitespace (e.g. a trailing newline) is trimmed. A missing, unreadable, empty
+  or oversized (> 64 KiB) file stops the start with an error naming the target
+  — the content is never logged. `--validate` does **not** open the files, so a
+  CI dry-run works without access to the secrets. A rotated secret takes effect
+  after a restart. Keep the files readable only by the Sentinel user (`0600`).
 
 ### TLS verification
 
