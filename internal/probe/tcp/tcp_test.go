@@ -278,10 +278,11 @@ func TestTCPBannerCapStopsAnEndlessStream(t *testing.T) {
 
 	// Sanity check on the fixture: the server must have offered materially more
 	// than the probe kept, otherwise the stream ran dry on its own and this test
-	// would pass even with no cap at all. (The server cannot get much past the
-	// cap before the probe closes the connection, so this is compared against
-	// what was retained — not against the budget.)
-	if offered, kept := written(), int64(len(diag.Banner)); offered <= kept*2 {
+	// would pass even with no cap at all. How far the server gets past the cap
+	// depends on the kernel's socket buffers (on Linux it can stop at exactly
+	// twice the cap), so any surplus is proof enough; a fixed multiple of the
+	// retained size would make the check flaky.
+	if offered, kept := written(), int64(len(diag.Banner)); offered <= kept {
 		t.Fatalf("the fixture offered %d bytes and the probe kept %d; the stream was not endless "+
 			"enough to demonstrate the read is bounded", offered, kept)
 	}
