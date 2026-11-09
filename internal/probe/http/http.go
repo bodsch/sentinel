@@ -154,6 +154,9 @@ type Prober struct {
 	hopSameOrigin bool
 	tlsInfo       *tlsdiag.Info
 	tlsReason     probe.FailureReason
+	// hopTrace is the trace of the hop currently (or last) in flight, kept so a
+	// timeout can be attributed to the phase it hit.
+	hopTrace *hopTrace
 }
 
 // compile-time check.
@@ -348,10 +351,11 @@ func (p *Prober) Probe(ctx context.Context) probe.Result {
 	defer cancel()
 
 	start := time.Now()
+	p.hopTrace = nil
 	diag, timings, reason := p.run(ctx)
 	end := time.Now()
 
-	return probe.Result{
+	res := probe.Result{
 		Success:       reason == probe.ReasonNone,
 		FailureReason: reason,
 		Duration:      end.Sub(start),
@@ -359,6 +363,10 @@ func (p *Prober) Probe(ctx context.Context) probe.Result {
 		Diagnostics:   diag,
 		Timestamp:     end,
 	}
+	if reason.IsTimeout() && p.hopTrace != nil {
+		res.TimeoutPhase = p.hopTrace.stalledPhase()
+	}
+	return res
 }
 
 // run executes the request, following redirects manually, and returns the
@@ -422,6 +430,7 @@ func (p *Prober) run(ctx context.Context) (*Diagnostics, probe.Timings, probe.Fa
 		p.tlsReason = probe.ReasonNone
 
 		tr := newHopTrace()
+		p.hopTrace = tr
 		req = req.WithContext(traceContext(req.Context(), tr))
 
 		resp, err := p.transport.RoundTrip(req)

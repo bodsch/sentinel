@@ -132,6 +132,10 @@ func (p *Prober) Probe(ctx context.Context) probe.Result {
 
 	if err != nil {
 		res.FailureReason = classifyError(err)
+		if res.FailureReason.IsTimeout() {
+			// The whole probe is the query, so a timeout can only be here.
+			res.TimeoutPhase = probe.PhaseDNS
+		}
 		return res
 	}
 

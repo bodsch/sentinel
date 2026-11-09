@@ -94,6 +94,38 @@ func (t *hopTrace) timings(downloadEnd time.Time) probe.Timings {
 	return out
 }
 
+// stalledPhase reports the phase this hop had reached: the first phase that was
+// started but not finished, or, between phases, the one about to begin. It is
+// read after a timeout to say where the hop was stuck.
+//
+// The order follows the request's life: the response body (download) once a
+// first byte arrived, waiting for that byte (ttfb) once the connection was
+// usable, otherwise the TLS handshake, TCP connect or name resolution. A hop with
+// no recorded event at all yields PhaseNone — nothing can be attributed.
+func (t *hopTrace) stalledPhase() probe.Phase {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	switch {
+	case !t.firstByte.IsZero():
+		return probe.PhaseDownload
+	case !t.tlsDone.IsZero():
+		return probe.PhaseTTFB
+	case !t.tlsStart.IsZero():
+		return probe.PhaseTLS
+	case !t.connectDone.IsZero():
+		// Plain HTTP waits for the response here; for HTTPS the handshake is
+		// about to start, but no TLS event fired, so the time was spent waiting.
+		return probe.PhaseTTFB
+	case !t.connectStart.IsZero(), !t.dnsDone.IsZero():
+		return probe.PhaseConnect
+	case !t.dnsStart.IsZero():
+		return probe.PhaseDNS
+	default:
+		return probe.PhaseNone
+	}
+}
+
 // diff returns to-from if both are set and to is after from, else 0.
 func diff(from, to time.Time) time.Duration {
 	if from.IsZero() || to.IsZero() || !to.After(from) {

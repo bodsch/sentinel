@@ -153,10 +153,10 @@ func (p *Prober) Probe(ctx context.Context) probe.Result {
 	defer cancel()
 
 	start := time.Now()
-	diag, timings, reason := p.run(ctx)
+	diag, timings, phase, reason := p.run(ctx)
 	end := time.Now()
 
-	return probe.Result{
+	res := probe.Result{
 		Success:       reason == probe.ReasonNone,
 		FailureReason: reason,
 		Duration:      end.Sub(start),
@@ -164,12 +164,16 @@ func (p *Prober) Probe(ctx context.Context) probe.Result {
 		Diagnostics:   diag,
 		Timestamp:     end,
 	}
+	if reason.IsTimeout() {
+		res.TimeoutPhase = phase
+	}
+	return res
 }
 
 // run resolves, connects, handshakes and inspects, returning the diagnostics
-// gathered so far, the phase timings, and the failure reason (ReasonNone on
-// success).
-func (p *Prober) run(ctx context.Context) (*Diagnostics, probe.Timings, probe.FailureReason) {
+// gathered so far, the phase timings, the phase the run ended in (reported by
+// the caller on a timeout), and the failure reason (ReasonNone on success).
+func (p *Prober) run(ctx context.Context) (*Diagnostics, probe.Timings, probe.Phase, probe.FailureReason) {
 	var timings probe.Timings
 	diag := &Diagnostics{ServerName: p.sni()}
 
@@ -178,12 +182,10 @@ func (p *Prober) run(ctx context.Context) (*Diagnostics, probe.Timings, probe.Fa
 	p.certRequested = false
 
 	conn, err := dialTCP(ctx, p.resolver, p.host, p.port)
-	if conn != nil {
-		timings.DNS = conn.dns
-		timings.Connect = conn.connect
-	}
+	timings.DNS = conn.dns
+	timings.Connect = conn.connect
 	if err != nil {
-		return diag, timings, probe.ClassifyNetworkError(err)
+		return diag, timings, conn.phase, probe.ClassifyNetworkError(err)
 	}
 	defer func() { _ = conn.conn.Close() }()
 	diag.Endpoint = conn.endpoint
@@ -202,16 +204,16 @@ func (p *Prober) run(ctx context.Context) (*Diagnostics, probe.Timings, probe.Fa
 	}
 	if err != nil {
 		if p.reason != probe.ReasonNone {
-			return diag, timings, p.reason
+			return diag, timings, probe.PhaseTLS, p.reason
 		}
-		return diag, timings, probe.ClassifyNetworkError(err)
+		return diag, timings, probe.PhaseTLS, probe.ClassifyNetworkError(err)
 	}
 
 	if reason := p.confirmAccepted(ctx, tlsConn); reason != probe.ReasonNone {
-		return diag, timings, reason
+		return diag, timings, probe.PhaseTLS, reason
 	}
 
-	return diag, timings, p.policy.Evaluate(diag.TLS)
+	return diag, timings, probe.PhaseTLS, p.policy.Evaluate(diag.TLS)
 }
 
 // acceptanceWindow bounds how long confirmAccepted waits for the server to

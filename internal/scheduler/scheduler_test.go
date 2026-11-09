@@ -445,6 +445,45 @@ func TestLogResultCarriesTheCoreFieldSet(t *testing.T) {
 	}
 }
 
+// TestLogResultCarriesTimeoutPhase verifies that a timeout's phase reaches the
+// log line, and that a failure without a recorded phase carries no empty
+// "phase" field — its presence alone must mean "this timeout was attributed".
+func TestLogResultCarriesTimeoutPhase(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		result probe.Result
+		want   any // nil = field absent
+	}{
+		{"timeout with phase", probe.Result{FailureReason: probe.ReasonTimeout, TimeoutPhase: probe.PhaseTLS}, "tls"},
+		{"timeout without phase", probe.Result{FailureReason: probe.ReasonTimeout}, nil},
+		{"non-timeout failure", probe.Result{FailureReason: probe.ReasonHTTPStatusError}, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s, buf := newLoggingScheduler(t, store.New())
+			s.execute(context.Background(), &job{spec: JobSpec{Name: "x", Type: "http", Prober: &fakeProber{result: tc.result}}})
+
+			recs := logLines(t, buf)
+			if len(recs) != 1 {
+				t.Fatalf("got %d log records, want 1", len(recs))
+			}
+			got, present := recs[0][logging.FieldPhase]
+			if tc.want == nil {
+				if present {
+					t.Errorf("%s = %v, want the field absent", logging.FieldPhase, got)
+				}
+				return
+			}
+			if got != tc.want {
+				t.Errorf("%s = %v, want %v", logging.FieldPhase, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestLogResultOmitsFailureReasonOnSuccess is the other half of the schema
 // decision: failure_reason lives at the call site precisely so a success line
 // does not carry it. A success line stamped with failure_reason="none" would

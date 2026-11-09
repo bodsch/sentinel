@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/netip"
 	"time"
+
+	"bodsch.me/sentinel/internal/probe"
 )
 
 // resolver abstracts name resolution so tests can inject a deterministic one.
@@ -23,6 +25,9 @@ type connection struct {
 	endpoint string
 	dns      time.Duration
 	connect  time.Duration
+	// phase is the phase reached: dns while resolving, connect from the first
+	// connection attempt on. On failure it says which of the two failed.
+	phase probe.Phase
 }
 
 // dialTCP resolves the host and opens a TCP connection, timing the two phases
@@ -43,21 +48,23 @@ type connection struct {
 //   - host: hostname or IP literal.
 //   - port: the TCP port as a string.
 //
-// It returns the established connection with its timings, or an error from the
-// last address attempted.
+// It returns the connection record and an error from the last address
+// attempted. The record is never nil: on failure it carries the timings measured
+// so far and the phase that failed, with a nil conn.
 func dialTCP(ctx context.Context, res resolver, host, port string) (*connection, error) {
-	out := &connection{}
+	out := &connection{phase: probe.PhaseDNS}
 
 	dnsStart := time.Now()
 	addrs, err := res.LookupNetIP(ctx, "ip", host)
 	out.dns = time.Since(dnsStart)
 	if err != nil {
-		return nil, err
+		return out, err
 	}
 	if len(addrs) == 0 {
-		return nil, &net.DNSError{Err: "no addresses returned", Name: host, IsNotFound: true}
+		return out, &net.DNSError{Err: "no addresses returned", Name: host, IsNotFound: true}
 	}
 
+	out.phase = probe.PhaseConnect
 	var dialer net.Dialer
 	connectStart := time.Now()
 	var lastErr error
@@ -66,7 +73,7 @@ func dialTCP(ctx context.Context, res resolver, host, port string) (*connection,
 		// through every remaining address after the budget is gone.
 		if ctx.Err() != nil {
 			out.connect = time.Since(connectStart)
-			return nil, ctx.Err()
+			return out, ctx.Err()
 		}
 
 		endpoint := net.JoinHostPort(addr.Unmap().String(), port)
@@ -85,5 +92,5 @@ func dialTCP(ctx context.Context, res resolver, host, port string) (*connection,
 	if lastErr == nil {
 		lastErr = errors.New("no address could be dialled")
 	}
-	return nil, fmt.Errorf("connecting to %s: %w", net.JoinHostPort(host, port), lastErr)
+	return out, fmt.Errorf("connecting to %s: %w", net.JoinHostPort(host, port), lastErr)
 }

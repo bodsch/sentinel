@@ -11,6 +11,9 @@
 //   - outcome, known after it finishes: "success", "duration_ms" (WithResult)
 //   - "failure_reason" stays at the call site: it is meaningful only on the
 //     failure lines, and stamping it on a success line would emit "none".
+//   - "phase" likewise: present only on a timeout failure, naming the phase
+//     that was in progress (dns, connect, tls, ttfb, download, banner). See
+//     FailureAttrs.
 //
 // Successful probes log at debug; failures and state changes at info.
 package logging
@@ -37,6 +40,9 @@ const (
 	// FieldFailureReason is the stable failure enum, present only on failure
 	// lines.
 	FieldFailureReason = "failure_reason"
+	// FieldPhase is the phase a timed-out probe was stuck in, present only on
+	// timeout failure lines.
+	FieldPhase = "phase"
 )
 
 // Format selects the handler output encoding.
@@ -116,6 +122,24 @@ func WithProbe(l *slog.Logger, target, probeType string) *slog.Logger {
 		slog.String(FieldTarget, target),
 		slog.String(FieldProbeType, probeType),
 	)
+}
+
+// FailureAttrs returns the attributes of a failure line: the failure reason and,
+// when the probe recorded one, the phase it timed out in. An empty phase is
+// omitted rather than logged as "", so the field's presence alone means "this
+// timeout was attributed".
+//
+// Parameters:
+//   - reason: the stable failure reason.
+//   - phase: the timeout phase; empty for non-timeout failures.
+//
+// It returns the attributes in a fixed order, ready to pass to a log call.
+func FailureAttrs(reason, phase string) []any {
+	attrs := []any{slog.String(FieldFailureReason, reason)}
+	if phase != "" {
+		attrs = append(attrs, slog.String(FieldPhase, phase))
+	}
+	return attrs
 }
 
 // WithResult returns a logger that stamps a completed probe's outcome fields.
