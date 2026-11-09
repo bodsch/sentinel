@@ -62,7 +62,7 @@ func TestDNSValidationErrors(t *testing.T) {
 		},
 		{
 			name:    "unsupported type",
-			yaml:    "targets:\n  - name: x\n    dns:\n      server: 1.1.1.1\n      query: example.org\n      type: SRV\n",
+			yaml:    "targets:\n  - name: x\n    dns:\n      server: 1.1.1.1\n      query: example.org\n      type: PTR\n",
 			wantSub: "dns.type",
 		},
 		{
@@ -103,5 +103,70 @@ func TestDNSValidationErrors(t *testing.T) {
 				t.Fatalf("error %q does not contain %q", err.Error(), tc.wantSub)
 			}
 		})
+	}
+}
+
+// TestDNSCNAMEAndSRVValid covers the record types added after 0.2, including the
+// case-insensitive type name and an SRV expectation with irregular spacing.
+func TestDNSCNAMEAndSRVValid(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseResolve(t, `
+targets:
+  - name: cname
+    dns:
+      server: 1.1.1.1
+      query: www.example.org
+      type: cname
+      expected: [example.org]
+  - name: srv
+    dns:
+      server: 1.1.1.1
+      query: _sip._tcp.example.org
+      type: SRV
+      expected:
+        - "10 5 5060 sip.example.org"
+        - "20  0  5061  sip2.example.org."
+`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := cfg.Targets[0].DNS.Type; got != "CNAME" {
+		t.Errorf("type = %q, want CNAME", got)
+	}
+}
+
+// TestDNSSRVExpectedMalformed rejects SRV expectations that could never match a
+// real answer, naming the offending entry.
+func TestDNSSRVExpectedMalformed(t *testing.T) {
+	t.Parallel()
+
+	for name, value := range map[string]string{
+		"target only":        "sip.example.org",
+		"port and target":    "5060 sip.example.org",
+		"five fields":        "10 5 5060 sip.example.org extra",
+		"non-numeric weight": "10 x 5060 sip.example.org",
+		"port out of range":  "10 5 70000 sip.example.org",
+		"negative priority":  "-1 5 5060 sip.example.org",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			yaml := "targets:\n  - name: x\n    dns:\n      server: 1.1.1.1\n      query: _sip._tcp.example.org\n      type: srv\n      expected: [\"" + value + "\"]\n"
+			_, err := parseResolve(t, yaml)
+			if err == nil || !strings.Contains(err.Error(), "dns.expected[0]") {
+				t.Fatalf("err = %v, want a dns.expected[0] error", err)
+			}
+		})
+	}
+}
+
+// TestDNSSRVFormatOnlyCheckedForSRV makes sure the SRV form is not imposed on
+// other types, where a single token is the normal expected value.
+func TestDNSSRVFormatOnlyCheckedForSRV(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseResolve(t, "targets:\n  - name: x\n    dns:\n      server: 1.1.1.1\n      query: example.org\n      type: TXT\n      expected: [\"10 5 not-srv\"]\n")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

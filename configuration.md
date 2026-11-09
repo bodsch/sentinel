@@ -23,7 +23,7 @@ The configuration is designed for:
 > **Version scope:** This document specifies the full configuration surface. **Version 0.2**
 > implements a `defaults` + `targets` layout (no templates), a fixed label set, a single total
 > `timeout`, and three protocols: **HTTP** (methods GET/HEAD/POST/PUT/PATCH/DELETE, request body,
-> custom headers, Basic/Bearer auth, per-target `max_body_bytes`), **DNS** (A/AAAA/MX/TXT), and
+> custom headers, Basic/Bearer auth, per-target `max_body_bytes`), **DNS** (A/AAAA/MX/TXT/CNAME/SRV), and
 > **TCP** (connect + `banner_regex`). Response validators are status / body_regex / headers /
 > **JSONPath** (`expect.json`). Sections marked **(0.2+ / planned)** below — templates, retry,
 > per-target proxy, per-phase timeouts, **XPath**, hot reload, and the standalone `icmp`/`tls`/
@@ -562,13 +562,37 @@ targets:
     dns:
       server: 1.1.1.1          # host or host:port (default port 53)
       query: example.org       # name to look up
-      type: A                  # A, AAAA, MX or TXT (default A, case-insensitive)
+      type: A                  # A, AAAA, MX, TXT, CNAME or SRV (default A, case-insensitive)
       expected:                # optional; at least one answer must match
         - 93.184.216.34
 ```
 
-Supported record types (0.2): **A, AAAA, MX, TXT**. (CNAME/SRV and DNSSEC
-validation remain future work.)
+Supported record types: **A, AAAA, MX, TXT, CNAME, SRV**. (DNSSEC validation
+remains future work.)
+
+CNAME and SRV examples:
+
+```
+targets:
+  - name: www-alias
+    dns:
+      server: 1.1.1.1
+      query: www.example.org
+      type: CNAME
+      expected: [edge.cdn.example.net]
+
+  - name: sip-srv
+    dns:
+      server: 1.1.1.1
+      query: _sip._tcp.example.org
+      type: SRV
+      expected:
+        - "10 5 5060 sip.example.org"   # priority weight port target
+```
+
+An SRV answer is reported — and an SRV expectation written — in zone-file order
+`priority weight port target`. A malformed SRV expectation is rejected at
+config load, since it could never match.
 
 Behaviour:
 
@@ -579,8 +603,12 @@ Behaviour:
 - Without `expected`, a NOERROR response is a success even with zero answers —
   use `sentinel_dns_answer_count == 0` to alert on "did not resolve".
 - With `expected`, at least one answer must match. Matching is type-aware: IPs
-  compare numerically (A/AAAA), MX hostnames compare case-insensitively, TXT
-  compares exactly.
+  compare numerically (A/AAAA), MX and CNAME hostnames compare
+  case-insensitively, SRV compares all four fields (numbers numerically, the
+  target case-insensitively, whitespace between fields is free), TXT compares
+  exactly.
+- A query of type A/AAAA that is answered through a CNAME chain reports only
+  the address records; query type CNAME to watch the alias itself.
 
 ---
 

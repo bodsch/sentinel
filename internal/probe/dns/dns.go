@@ -9,7 +9,9 @@ package dns
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,8 +30,10 @@ const defaultPort = "53"
 var typeCodes = map[string]uint16{
 	"A":    dnslib.TypeA,
 	"AAAA": dnslib.TypeAAAA,
-	"MX":   dnslib.TypeMX,
-	"TXT":  dnslib.TypeTXT,
+	"MX":    dnslib.TypeMX,
+	"TXT":   dnslib.TypeTXT,
+	"CNAME": dnslib.TypeCNAME,
+	"SRV":   dnslib.TypeSRV,
 }
 
 // Options carries the fully-resolved settings for one DNS target.
@@ -40,7 +44,8 @@ type Options struct {
 	Server string
 	// Query is the name to look up.
 	Query string
-	// Type is the record type: A, AAAA, MX or TXT (already uppercased).
+	// Type is the record type: A, AAAA, MX, TXT, CNAME or SRV (already
+	// uppercased).
 	Type string
 	// Expected is an optional set of expected answers; when set, at least one
 	// answer must match one expected value.
@@ -190,6 +195,10 @@ func extractAnswers(resp *dnslib.Msg, qtype uint16) []string {
 			out = append(out, strings.TrimSuffix(v.Mx, "."))
 		case *dnslib.TXT:
 			out = append(out, strings.Join(v.Txt, ""))
+		case *dnslib.CNAME:
+			out = append(out, strings.TrimSuffix(v.Target, "."))
+		case *dnslib.SRV:
+			out = append(out, fmt.Sprintf("%d %d %d %s", v.Priority, v.Weight, v.Port, strings.TrimSuffix(v.Target, ".")))
 		}
 	}
 	return out
@@ -199,7 +208,10 @@ func extractAnswers(resp *dnslib.Msg, qtype uint16) []string {
 // comparison appropriate to the record type:
 //   - A/AAAA: parse both sides as IPs and compare numerically, so equivalent
 //     textual forms (uppercase or expanded IPv6) still match.
-//   - MX: hostnames are case-insensitive (RFC 4343); compare case-folded.
+//   - MX, CNAME: hostnames are case-insensitive (RFC 4343); compare
+//     case-folded.
+//   - SRV: "priority weight port target"; numbers compared numerically, the
+//     target case-folded.
 //   - TXT: text is case-sensitive; compare exactly.
 func matchExpected(answers, expected []string, qtype uint16) bool {
 	for _, a := range answers {
@@ -221,11 +233,50 @@ func valueEqual(answer, expected string, qtype uint16) bool {
 			return ia.Equal(ib)
 		}
 		return answer == expected
-	case dnslib.TypeMX:
-		return strings.EqualFold(strings.TrimSuffix(answer, "."), strings.TrimSuffix(expected, "."))
+	case dnslib.TypeMX, dnslib.TypeCNAME:
+		return hostEqual(answer, expected)
+	case dnslib.TypeSRV:
+		a, okA := parseSRV(answer)
+		e, okE := parseSRV(expected)
+		return okA && okE && a.priority == e.priority && a.weight == e.weight && a.port == e.port && hostEqual(a.target, e.target)
 	default: // TXT and any other text-valued type: case-sensitive.
 		return answer == expected
 	}
+}
+
+// hostEqual compares two host names case-insensitively, ignoring a trailing dot.
+func hostEqual(a, b string) bool {
+	return strings.EqualFold(strings.TrimSuffix(a, "."), strings.TrimSuffix(b, "."))
+}
+
+// srvValue is the parsed form of an SRV answer or expected value.
+type srvValue struct {
+	priority, weight, port uint16
+	target                 string
+}
+
+// parseSRV parses the zone-file form "priority weight port target" used for SRV
+// answers and expected values. Any run of whitespace separates the fields.
+//
+// Parameters:
+//   - s: the text to parse.
+//
+// It returns the parsed value and true, or false when s does not have exactly
+// four fields or a number is not a valid uint16.
+func parseSRV(s string) (srvValue, bool) {
+	fields := strings.Fields(s)
+	if len(fields) != 4 {
+		return srvValue{}, false
+	}
+	var nums [3]uint16
+	for i := range nums {
+		n, err := strconv.ParseUint(fields[i], 10, 16)
+		if err != nil {
+			return srvValue{}, false
+		}
+		nums[i] = uint16(n)
+	}
+	return srvValue{priority: nums[0], weight: nums[1], port: nums[2], target: fields[3]}, true
 }
 
 // withDefaultPort appends the default DNS port when the server has none.

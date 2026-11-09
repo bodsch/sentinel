@@ -5,7 +5,7 @@
 **Versions 0.1 and 0.2 are implemented and shipped.** The runtime skeleton
 (configuration → scheduler → probe → result store → `/metrics`) is complete, and
 four protocols run end-to-end: HTTP/HTTPS (full phase timing, methods, body,
-headers, auth, redirect handling, TLS chain verification), DNS (A/AAAA/MX/TXT),
+headers, auth, redirect handling, TLS chain verification), DNS (A/AAAA/MX/TXT/CNAME/SRV),
 TCP (connect + banner) and TLS (any endpoint speaking TLS on connect: LDAPS,
 SMTPS, IMAPS, MQTT …). Response validators cover status / body-regex /
 header / JSONPath, latency histograms are fed at probe time, and the build ships
@@ -88,14 +88,13 @@ Increase diagnostic capabilities and expand beyond HTTP.
 
 Implemented:
 
-- A / AAAA / MX / TXT records against a configurable resolver
+- A / AAAA / MX / TXT / CNAME / SRV records against a configurable resolver
 - RCODE, answer-count and query-timing metrics
 - optional expected-answer validation (type-aware matching)
 - EDNS0 + automatic TCP fallback on truncation
 
 Planned:
 
-- CNAME / SRV records
 - DNSSEC validation
 
 ---
