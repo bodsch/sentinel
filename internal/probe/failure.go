@@ -46,6 +46,11 @@ const (
 	// different answer sets from them, although each answered successfully.
 	ReasonDNSMismatch FailureReason = "dns_mismatch"
 
+	// ReasonDNSLameDelegation means a zone's nameserver answered the SOA query
+	// without authority (or without the zone's SOA): the delegation points at
+	// a server that does not serve the zone.
+	ReasonDNSLameDelegation FailureReason = "dns_lame_delegation"
+
 	// ReasonStartTLSFailed means the server answered the STARTTLS dialogue but
 	// did not agree to upgrade: a refusing greeting, STARTTLS not offered, a
 	// negative reply, or a malformed or oversized response. A network failure
@@ -62,6 +67,7 @@ const (
 var allReasons = map[FailureReason]struct{}{
 	ReasonDNSError:            {},
 	ReasonDNSMismatch:         {},
+	ReasonDNSLameDelegation:   {},
 	ReasonTCPTimeout:          {},
 	ReasonConnectionRefused:   {},
 	ReasonTLSError:            {},

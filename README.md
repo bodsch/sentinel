@@ -235,7 +235,8 @@ chapter also maps every blackbox_exporter TLS series to its Sentinel counterpart
 ### Implemented
 
 - HTTP / HTTPS
-- DNS (A, AAAA, MX, TXT, CNAME, SRV; one resolver or several compared)
+- DNS (A, AAAA, MX, TXT, CNAME, SRV; one resolver or several compared; a zone's
+  nameservers checked for authority and SOA serial)
 - TCP (connection check + optional `banner_regex` validation)
 - TLS (TLS on connect, or STARTTLS for SMTP, IMAP, POP3, LDAP)
 
@@ -363,7 +364,7 @@ failure reason, which already says where the run failed.
 ## Future (maybe) Improvements
 
 Planned next: more protocols (ICMP, mail, LDAP, SSH, NTP, MQTT, gRPC), DNS and
-TLS depth (DNSSEC, authoritative server checks, version/cipher enumeration,
+TLS depth (DNSSEC, version/cipher enumeration,
 active revocation checks) and HTTP depth (HTTP/2, XPath, body-size
 and compression checks).
 

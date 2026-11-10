@@ -86,11 +86,16 @@ func (c *Config) applyDefaults() {
 	}
 }
 
-// applyDNSDefaults normalises the record type (uppercase) and defaults it to A.
+// applyDNSDefaults normalises the record type (uppercase) and defaults it to A,
+// or to SOA for the authoritative check; it also lowercases nameserver_family.
 func applyDNSDefaults(d *DNSConfig) {
+	if d.Type == "" && d.Authoritative {
+		d.Type = "SOA"
+	}
 	if d.Type == "" {
 		d.Type = defaultDNSType
 	}
+	d.NameserverFamily = strings.ToLower(strings.TrimSpace(d.NameserverFamily))
 	d.Type = strings.ToUpper(d.Type)
 }
 

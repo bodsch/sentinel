@@ -260,6 +260,24 @@ type DNSConfig struct {
 	// one answer must match one expected value. SRV values are written as
 	// "priority weight port target", e.g. "10 5 5060 sip.example.org".
 	Expected []string `yaml:"expected"`
+	// Authoritative switches to the delegation check: Query is a zone, Server
+	// is the resolver used to find the zone's nameservers, and every
+	// nameserver is asked directly for the SOA. All must answer with
+	// authority and the same serial. Type must be unset or SOA; Expected and
+	// Servers are not allowed.
+	Authoritative bool `yaml:"authoritative"`
+	// NameserverFamily selects which nameserver addresses the authoritative
+	// check queries: "ipv4" (default), "ipv6" or "both". Normalised to
+	// lowercase on load.
+	NameserverFamily string `yaml:"nameserver_family"`
+}
+
+// AllowedNameserverFamilies is the set of supported dns.nameserver_family
+// values.
+var AllowedNameserverFamilies = map[string]struct{}{
+	"ipv4": {},
+	"ipv6": {},
+	"both": {},
 }
 
 // TCPConfig describes a TCP connection check: establish a connection to Address

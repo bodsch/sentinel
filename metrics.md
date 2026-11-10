@@ -204,6 +204,8 @@ dns_error
 
 dns_mismatch
 
+dns_lame_delegation
+
 tcp_timeout
 
 connection_refused
@@ -678,6 +680,31 @@ max by (target) (sentinel_dns_resolver_answer_count)
 ```
 
 A resolver that stopped answering shows as `sentinel_dns_resolver_response_code == -1`.
+
+---
+
+### Nameserver check (`dns.authoritative` only)
+
+```
+sentinel_dns_answers_consistent                                   # 1 = all SOA serials equal
+sentinel_dns_nameserver_query_duration_seconds{nameserver,address}
+sentinel_dns_nameserver_response_code{nameserver,address}         # RCODE, -1 = no response
+sentinel_dns_nameserver_authoritative{nameserver,address}         # 1 = AA flag and the zone's SOA
+sentinel_dns_nameserver_soa_serial{nameserver,address}            # absent without an answer
+```
+
+`nameserver` is the name from the NS record, `address` the `ip:port` queried. A
+nameserver whose name did not resolve appears with an empty `address`. For
+these targets `sentinel_dns_answer_count` is the number of nameservers and
+`sentinel_dns_response_code` the RCODE of the NS lookup.
+
+Which secondary lags behind:
+
+```
+sentinel_dns_nameserver_soa_serial
+  < on (target) group_left
+max by (target) (sentinel_dns_nameserver_soa_serial)
+```
 
 ---
 

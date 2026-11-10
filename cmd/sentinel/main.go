@@ -380,6 +380,9 @@ func dnsOptions(target config.Target) dnsprobe.Options {
 		Type:     d.Type,
 		Expected: d.Expected,
 		Timeout:  target.ResolvedTimeout(),
+
+		Authoritative: d.Authoritative,
+		Family:        dnsprobe.Family(d.NameserverFamily),
 	}
 }
 
