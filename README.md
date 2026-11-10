@@ -360,19 +360,17 @@ failure reason, which already says where the run failed.
 
 ## Future (maybe) Improvements
 
-Planned improvements:
+Planned next: more protocols (ICMP, mail with STARTTLS, LDAP, SSH, NTP, MQTT,
+gRPC), DNS and TLS depth (DNSSEC, resolver comparison, version/cipher
+enumeration, active revocation checks) and HTTP depth (HTTP/2, XPath, body-size
+and compression checks).
 
-- REST API
-- Web UI
-- live probe execution
-- dynamic configuration reload
-- templates
-- target inheritance
-- tagging
-- multi-location probes
-- distributed agents
-- baseline comparison
-- anomaly detection
+Deferred until a concrete need appears: templates, hot reload, a diagnostics
+API, sharding, HTTP/3, multi-location probes and distributed agents.
+
+Declined on purpose: a web UI (the Grafana dashboard covers it), a
+configuration API, baseline/anomaly analysis (Prometheus has the history),
+in-probe retry and a container image. `Roadmap.md` gives the reasons.
 
 ---
 

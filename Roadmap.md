@@ -10,7 +10,8 @@ TCP (connect + banner) and TLS (any endpoint speaking TLS on connect: LDAPS,
 SMTPS, IMAPS, MQTT …). Response validators cover status / body-regex /
 header / JSONPath, latency histograms are fed at probe time, and the build ships
 with security tooling (golangci-lint incl. gosec, govulncheck) and Forgejo CI /
-release pipelines. Later versions (0.3+) below are still planned.
+release pipelines. Later versions (0.3+) below are still planned; items dropped during triage are
+listed under *Declined*.
 
 The roadmap focuses on building a stable monitoring foundation before adding advanced functionality.
 
@@ -158,7 +159,6 @@ Planned:
   scheduler's observer hook, capturing every probe (not just the last one seen
   at scrape). They replaced the 0.1 gauges of the same name. See `metrics.md` →
   *Histograms*.
-- in-probe retry with retry metrics
 - ~~scrape performance at high target counts~~ **(addressed)**. `/metrics`
   rendering is O(N) (~259 ms at N=10000 — see `docs/benchmark-vs-blackbox.md`,
   Dimension B). Investigation showed the cost is ~95 % Prometheus client-library
@@ -317,26 +317,6 @@ Planned:
 
 ---
 
-### Diagnostics API
-
-Planned:
-
-REST API:
-
-```
-GET /api/v1/probes/{target}
-```
-
-Provides:
-
-- latest result
-- execution phases
-- detailed error information
-- redirect chain
-- TLS information
-
----
-
 ### Security, Tooling & CI
 
 Implemented:
@@ -355,14 +335,6 @@ non-stdlib dependency of the TLS work) surfaces the module-level advisory
 import it, the symbol-level scan reports zero vulnerabilities, and the advisory
 has no fixed version because the package is unmaintained by design. `make vuln`
 therefore still passes; the line in its output is expected, not a regression.
-
-Planned:
-
-- ~~signed release artifacts, SBOM generation on release~~ **(declined)**: the
-  published `SHA256SUMS` are sufficient for the current distribution model;
-  signing/attestation and an SBOM add pipeline complexity without a consumer
-  that would verify them.
-- container image + image scanning
 
 ---
 
@@ -401,66 +373,6 @@ Checks:
 
 ---
 
-## Version 0.4 - Operational Features
-
-### Goal
-
-Make Sentinel easier to operate.
-
----
-
-### Planned Features
-
-Configuration
-
-- configuration API
-- dynamic target management
-- Git-based configuration
-- configuration versioning
-
----
-
-### Scaling
-
-Planned:
-
-- stateless hash-based sharding via `--shard-index` / `--shard-count` flags.
-  Every instance loads the *same* config but keeps only the targets whose name
-  hashes to its shard, so N targets spread across M instances with each carrying
-  ~N/M. Because Sentinel holds only current state, this needs **no coordination**
-  (no leader election, no shared state) — Prometheus scrapes each shard and
-  remains the single source of truth. This lowers per-instance render cost, RSS
-  and probe CPU, and adds fault isolation (one instance failing loses only its
-  shard). See `metrics.md` → *Operating at scale*.
-
-  Trade-offs to weigh before building: changing `--shard-count` reshuffles most
-  targets under plain hashing (brief probe gaps / series churn — consistent
-  hashing would mitigate but adds complexity); overlapping or incomplete shard
-  sets double-probe or silently drop targets; and each instance carries a fixed
-  Go-runtime baseline, so sharding only pays off past a few thousand targets.
-  Note that raising `scrape_interval` (probe cadence is decoupled from scrape)
-  is the cheaper first lever for scrape-cost pressure and should be preferred
-  until probe CPU/RAM on one machine is the actual limit.
-
-  Relates to the distributed multi-agent / multi-location vision in Version 1.0.
-
----
-
-### User Interface
-
-Optional web interface:
-
-Features:
-
-- target overview
-- current status
-- latency graphs
-- failure diagnostics
-- redirect visualization
-- certificate overview
-
----
-
 ## Version 1.0 - Synthetic Monitoring Platform
 
 ### Goal
@@ -496,39 +408,12 @@ Detect:
 
 ---
 
-### Baseline Analysis
-
-Instead of fixed thresholds:
-
-```
-Current TTFB:
-
-350ms
-
-
-Normal baseline:
-
-50ms
-
-
-Deviation:
-
-+600%
-```
-
-Possible alerts:
-
-- unusual latency
-- unexpected behavior
-- degradation trends
-
----
-
 ## Deferred / Optional
 
 Explicitly pushed back and marked **optional**: not tied to any version and not
 required for Sentinel to be fully useful. Revisit only when a concrete need
-appears. (Distinct from *Out of Scope* below, which are hard non-goals.)
+appears. (Distinct from *Declined* below, which were dropped on purpose, and
+*Out of Scope*, which are hard non-goals.)
 
 - **configuration templates** — reduce config duplication. Deferred: the flat
   `defaults` + `targets` model is adequate at the current scale, so the added
@@ -539,6 +424,60 @@ appears. (Distinct from *Out of Scope* below, which are hard non-goals.)
 - **HTTP/3 support** — probe over HTTP/3 / QUIC. Deferred: value is questionable
   right now — most monitored endpoints do not require QUIC-level probing and the
   standard-library HTTP/3 story is still maturing. Revisit if real demand shows.
+- **diagnostics API** (`GET /api/v1/probes/{target}`: latest result, phases,
+  error detail, redirect chain, TLS information). Deferred: the metrics, the
+  structured log (including `phase` on timeouts) and the Grafana dashboard answer
+  the diagnostic questions today; an API only pays off once something needs the
+  data programmatically.
+- **sharding** — stateless hash-based sharding via `--shard-index` /
+  `--shard-count` flags. Every instance loads the *same* config but keeps only the targets whose name
+  hashes to its shard, so N targets spread across M instances with each carrying
+  ~N/M. Because Sentinel holds only current state, this needs **no coordination**
+  (no leader election, no shared state) — Prometheus scrapes each shard and
+  remains the single source of truth. This lowers per-instance render cost, RSS
+  and probe CPU, and adds fault isolation (one instance failing loses only its
+  shard). See `metrics.md` → *Operating at scale*.
+
+  Trade-offs to weigh before building: changing `--shard-count` reshuffles most
+  targets under plain hashing (brief probe gaps / series churn — consistent
+  hashing would mitigate but adds complexity); overlapping or incomplete shard
+  sets double-probe or silently drop targets; and each instance carries a fixed
+  Go-runtime baseline, so sharding only pays off past a few thousand targets.
+  Note that raising `scrape_interval` (probe cadence is decoupled from scrape)
+  is the cheaper first lever for scrape-cost pressure and should be preferred
+  until probe CPU/RAM on one machine is the actual limit. Deferred: one
+  instance covers the current target counts.
+
+---
+
+## Declined
+
+Triaged on 2026-11-10 and dropped on purpose — not deferred. Each would add code
+or operational surface without a problem Sentinel needs to solve. Reopen only
+with a concrete case that the reasons below do not cover.
+
+- **in-probe retry** (with retry metrics) — a retry inside the probe hides the
+  very failure the probe exists to report and distorts the latency it measures.
+  Transient failures are damped where alert tolerance already lives: `for:` in
+  the Prometheus alerting rules.
+- **signed release artifacts, SBOM generation on release** — the published
+  `SHA256SUMS` are sufficient for the current distribution model;
+  signing/attestation and an SBOM add pipeline complexity without a consumer
+  that would verify them.
+- **container image + image scanning** — deployment (container, systemd,
+  Ansible) is handled outside this repository; the release binaries with
+  `SHA256SUMS` are the hand-off.
+- **configuration API, dynamic target management, Git-based configuration,
+  configuration versioning** — the YAML file is the interface. Versioning and
+  Git workflows belong to whatever deploys that file; `--validate` is the hook
+  for a CI check.
+- **web user interface** — target overview, status, latency graphs and
+  certificate overview are covered by the generated Grafana dashboard on top of
+  `/metrics`.
+- **baseline analysis / anomaly detection** — comparing against history needs
+  history, which Sentinel deliberately does not keep (see *Why Not Store History
+  Internally?*). Prometheus recording rules and alerts over the existing
+  histograms do this without a second source of truth.
 
 ---
 
