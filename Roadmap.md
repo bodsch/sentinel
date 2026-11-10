@@ -199,12 +199,15 @@ Planned:
 - XPath validation
 - body size validation
 - compression analysis
-- optional egress guard for redirects: reject redirect targets that resolve to
-  private/loopback/link-local ranges, or a per-target host allow-list. A
-  security-audit finding (low severity): an attacker-controlled `http→http`
-  redirect can currently drive the probe to unconfigured internal hosts (blind
-  recon via `/metrics`; credentials/body are not leaked — the origin guard
-  strips them). `follow_redirects: false` fully mitigates it today.
+- ~~optional egress guard for redirects~~ **(implemented)**: opt-in
+  `http.block_private_redirects` refuses a redirect to a different host whose
+  resolved address is private/loopback/link-local (failure reason
+  `redirect_blocked`). Enforced in the dialer on the address actually
+  connected to, so DNS rebinding cannot bypass it; behind an HTTP proxy the
+  hop's name is checked up front (best effort). Closes the low-severity
+  security-audit finding (blind recon of internal hosts via an
+  attacker-controlled redirect). A per-target host allow-list was not added —
+  no concrete need yet.
 - ~~configurable `max_body_bytes` cap~~ **(implemented)**. Per-target override
   already worked via the normal `defaults` + target merge; added an explicit
   per-target opt-out (`max_body_bytes: 0` = no cap, full body read into memory,

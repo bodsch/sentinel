@@ -403,6 +403,8 @@ func httpOptions(target config.Target, caPools map[string]*x509.CertPool, client
 		RequestHeaders:  h.Headers,
 		BearerToken:     h.BearerToken,
 		Body:            h.Body,
+
+		BlockPrivateRedirects: h.ResolvedBlockPrivateRedirects(),
 	}
 	if path := strings.TrimSpace(h.BearerTokenFile); path != "" {
 		token, err := readSecretFile(path)

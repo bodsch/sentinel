@@ -170,6 +170,7 @@ Sentinel detects:
 - excessive redirect chains
 - invalid redirect targets
 - HTTP downgrade redirects
+- redirects to private/loopback/link-local addresses (opt-in `block_private_redirects`)
 - unexpected domain changes
 
 Example:

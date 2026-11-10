@@ -20,6 +20,7 @@ defaults:
     follow_redirects: true
     max_redirects: 10
     max_body_bytes: 1048576   # 1 MiB cap on the body read (DoS safeguard)
+    block_private_redirects: false  # true: refuse redirects to other hosts on private/loopback addresses
 
 # ---------------------------------------------------------------------------
 # Targets. Each target needs a unique name and exactly one protocol block

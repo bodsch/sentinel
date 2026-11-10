@@ -121,6 +121,7 @@ defaults:
     follow_redirects: true
     max_redirects: 10
     max_body_bytes: 1048576
+    block_private_redirects: false
 ```
 
 All targets inherit these settings.
@@ -288,6 +289,40 @@ targets:
   behaviour for 301/302/303 and avoids re-sending the body (duplicate
   side-effects, cross-origin leaks). Set `follow_redirects: false` if a target
   needs the method preserved across a redirect.
+
+### Blocking redirects to internal addresses
+
+A monitored target decides where its redirects point. Without a guard, a
+compromised or hostile target can answer with `Location: http://10.0.0.5/` and
+make Sentinel probe an internal host it was never configured for — no
+credentials or request body leak (the origin guard strips them), but status and
+timing of the internal host become visible on `/metrics`. Set
+`block_private_redirects` to refuse such hops:
+
+```
+targets:
+  - name: partner-api
+    http:
+      url: https://api.partner.example/health
+      block_private_redirects: true
+```
+
+- A redirect to a **different host** whose address is loopback, private
+  (RFC 1918, `fc00::/7`), link-local (incl. `169.254.169.254`), unspecified,
+  carrier-grade NAT (`100.64.0.0/10`) or `0.0.0.0/8` is not followed; the probe
+  fails with `failure_reason="redirect_blocked"`.
+- Redirects within the **target's own host** are always followed, whatever its
+  address — `http://intranet` → `https://intranet:8443` keeps working, so the
+  option is safe on internal targets too.
+- The check runs on the address the connection is actually made to, after name
+  resolution, so a public-looking name that resolves to `127.0.0.1` (DNS
+  rebinding) is caught as well.
+- **With `HTTP_PROXY`/`HTTPS_PROXY`** Sentinel only connects to the proxy, so the
+  hop's name is resolved and checked beforehand instead. That is best effort:
+  the proxy resolves the name again and may get a different answer, and a name
+  Sentinel cannot resolve is left to the proxy.
+- Opt-in, default `false`; can be set in `defaults.http` and switched off again
+  per target. `follow_redirects: false` remains the strictest option.
 
 ### Request headers and authentication
 

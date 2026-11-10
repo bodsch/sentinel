@@ -213,6 +213,59 @@ targets:
 	}
 }
 
+// TestBlockPrivateRedirectsResolution covers the opt-in and its inheritance:
+// off when unset, inherited from defaults, and overridable per target in both
+// directions.
+func TestBlockPrivateRedirectsResolution(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseResolve(t, `
+targets:
+  - name: unset
+    http:
+      url: https://a.example
+  - name: on
+    http:
+      url: https://b.example
+      block_private_redirects: true
+`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Targets[0].HTTP.ResolvedBlockPrivateRedirects() {
+		t.Error("unset target: guard on, want off (opt-in)")
+	}
+	if !cfg.Targets[1].HTTP.ResolvedBlockPrivateRedirects() {
+		t.Error("explicit true: guard off, want on")
+	}
+
+	cfg, err = parseResolve(t, `
+defaults:
+  http:
+    block_private_redirects: true
+targets:
+  - name: inherits
+    http:
+      url: https://a.example
+  - name: opts-out
+    http:
+      url: https://b.example
+      block_private_redirects: false
+`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.Targets[0].HTTP.ResolvedBlockPrivateRedirects() {
+		t.Error("target inheriting defaults: guard off, want on")
+	}
+	if cfg.Targets[1].HTTP.ResolvedBlockPrivateRedirects() {
+		t.Error("explicit false over defaults: guard on, want off")
+	}
+	if cfg.Targets[0].HTTP.BlockPrivateRedirects == cfg.Defaults.HTTP.BlockPrivateRedirects {
+		t.Error("target aliases the defaults pointer")
+	}
+}
+
 func TestHTTPMethodAndBodyValid(t *testing.T) {
 	t.Parallel()
 
