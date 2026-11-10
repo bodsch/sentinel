@@ -55,6 +55,11 @@ type Result struct {
 	// redirect chain or TLS certificate information). It may be nil.
 	Diagnostics Diagnostics
 
+	// TimeoutPhase is the phase that was in progress when the run timed out
+	// (FailureReason.IsTimeout). It is PhaseNone for every other outcome, and
+	// also when a protocol could not attribute the timeout to a phase.
+	TimeoutPhase Phase
+
 	// Timestamp is when the run completed.
 	Timestamp time.Time
 }

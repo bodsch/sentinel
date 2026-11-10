@@ -264,16 +264,16 @@ func (s *Scheduler) logResult(j *job, result probe.Result, changed bool) {
 		result.Success,
 		result.Duration,
 	)
-	reason := slog.String(logging.FieldFailureReason, result.FailureReason.String())
+	failure := logging.FailureAttrs(result.FailureReason.String(), result.TimeoutPhase.String())
 	switch {
 	case changed && result.Success:
 		logger.Info("probe recovered")
 	case changed && !result.Success:
-		logger.Info("probe failing", reason)
+		logger.Info("probe failing", failure...)
 	case result.Success:
 		logger.Debug("probe succeeded")
 	default:
-		logger.Debug("probe still failing", reason)
+		logger.Debug("probe still failing", failure...)
 	}
 }
 

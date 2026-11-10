@@ -185,6 +185,9 @@ func TestProbeTimeout(t *testing.T) {
 	if res.FailureReason != probe.ReasonTimeout {
 		t.Fatalf("reason = %q, want timeout", res.FailureReason)
 	}
+	if res.TimeoutPhase != probe.PhaseDNS {
+		t.Errorf("phase = %q, want dns", res.TimeoutPhase)
+	}
 }
 
 func TestWithDefaultPort(t *testing.T) {

@@ -82,10 +82,10 @@ func (p *Prober) Probe(ctx context.Context) probe.Result {
 	defer cancel()
 
 	start := time.Now()
-	diag, timings, reason := p.dial(ctx)
+	diag, timings, phase, reason := p.dial(ctx)
 	end := time.Now()
 
-	return probe.Result{
+	res := probe.Result{
 		Success:       reason == probe.ReasonNone,
 		FailureReason: reason,
 		Duration:      end.Sub(start),
@@ -93,11 +93,17 @@ func (p *Prober) Probe(ctx context.Context) probe.Result {
 		Diagnostics:   diag,
 		Timestamp:     end,
 	}
+	if reason.IsTimeout() {
+		res.TimeoutPhase = phase
+	}
+	return res
 }
 
 // dial establishes the connection, records the connect timing, and optionally
-// reads and validates the banner.
-func (p *Prober) dial(ctx context.Context) (*Diagnostics, probe.Timings, probe.FailureReason) {
+// reads and validates the banner. Besides the diagnostics, timings and failure
+// reason it returns the phase the run ended in (connect or banner), which the
+// caller reports when the run timed out.
+func (p *Prober) dial(ctx context.Context) (*Diagnostics, probe.Timings, probe.Phase, probe.FailureReason) {
 	var timings probe.Timings
 	diag := &Diagnostics{}
 
@@ -106,12 +112,12 @@ func (p *Prober) dial(ctx context.Context) (*Diagnostics, probe.Timings, probe.F
 	conn, err := d.DialContext(ctx, "tcp", p.address)
 	timings.Connect = time.Since(connectStart)
 	if err != nil {
-		return diag, timings, classifyError(err)
+		return diag, timings, probe.PhaseConnect, classifyError(err)
 	}
 	defer func() { _ = conn.Close() }()
 
 	if len(p.bannerRegex) == 0 {
-		return diag, timings, probe.ReasonNone
+		return diag, timings, probe.PhaseConnect, probe.ReasonNone
 	}
 
 	// Bound the banner read by the probe deadline so a silent server cannot hang
@@ -132,22 +138,22 @@ func (p *Prober) dial(ctx context.Context) (*Diagnostics, probe.Timings, probe.F
 			banner = append(banner, buf[:n]...)
 			diag.Banner = string(banner)
 			if p.bannerMatches(diag.Banner) {
-				return diag, timings, probe.ReasonNone
+				return diag, timings, probe.PhaseBanner, probe.ReasonNone
 			}
 		}
 		if rerr != nil {
 			if len(banner) == 0 {
 				// Nothing arrived: a connection-level failure (reset, close, or
 				// timeout), not a banner mismatch — classify it accordingly.
-				return diag, timings, classifyError(rerr)
+				return diag, timings, probe.PhaseBanner, classifyError(rerr)
 			}
 			// A banner was received but never matched before the stream ended or
 			// the deadline hit.
-			return diag, timings, probe.ReasonValidationFailed
+			return diag, timings, probe.PhaseBanner, probe.ReasonValidationFailed
 		}
 	}
 	// Read the byte cap without matching.
-	return diag, timings, probe.ReasonValidationFailed
+	return diag, timings, probe.PhaseBanner, probe.ReasonValidationFailed
 }
 
 // bannerMatches reports whether s matches every configured banner pattern.

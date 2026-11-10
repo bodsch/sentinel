@@ -335,6 +335,28 @@ sentinel_http_ttfb_seconds_bucket{target="homepage",le="0.1"} 42
 
 ---
 
+## Logging
+
+Structured logs via `log/slog`, JSON by default (`-log-format text` for local
+use). Probe lines share one field set: `target`, `probe_type`, `success`,
+`duration_ms`, and on failures `failure_reason`. State changes (failing,
+recovered) log at `info`, steady state at `debug`, so a target that stays down
+logs once.
+
+A timeout additionally carries `phase` — where the probe was stuck: `dns`,
+`connect`, `tls`, `ttfb` (waiting for the response), `download` or `banner`
+(TCP greeting). `failure_reason="timeout"` alone cannot tell "slow to resolve"
+from "never answered"; the phase can:
+
+```
+{"time":"2026-11-09T10:00:00Z","level":"INFO","msg":"probe failing","target":"api","probe_type":"http","success":false,"duration_ms":10000,"failure_reason":"timeout","phase":"ttfb"}
+```
+
+The field is omitted when a timeout cannot be attributed and on every other
+failure reason, which already says where the run failed.
+
+---
+
 ## Future (maybe) Improvements
 
 Planned improvements:

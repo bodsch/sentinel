@@ -324,3 +324,36 @@ func TestTCPBannerCapMatchesLate(t *testing.T) {
 			maxBannerBytes, res.FailureReason)
 	}
 }
+
+// TestTCPTimeoutPhaseBanner: a server that accepts but never greets times out
+// waiting for the banner, and the phase says so — the connect itself worked.
+func TestTCPTimeoutPhaseBanner(t *testing.T) {
+	t.Parallel()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	done := make(chan struct{})
+	t.Cleanup(func() { close(done); _ = ln.Close() })
+	go func() {
+		for {
+			conn, aerr := ln.Accept()
+			if aerr != nil {
+				return
+			}
+			go func() { <-done; _ = conn.Close() }()
+		}
+	}()
+
+	opts := baseOpts(ln.Addr().String())
+	opts.BannerRegex = []string{"^SSH"}
+	opts.Timeout = 200 * time.Millisecond
+	res := runProbe(t, opts)
+	if !res.FailureReason.IsTimeout() {
+		t.Fatalf("reason = %q, want a timeout", res.FailureReason)
+	}
+	if res.TimeoutPhase != probe.PhaseBanner {
+		t.Errorf("phase = %q, want banner", res.TimeoutPhase)
+	}
+}

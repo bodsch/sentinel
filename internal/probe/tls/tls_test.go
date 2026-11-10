@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"net"
+	"net/netip"
 	"regexp"
 	"testing"
 	"time"
@@ -506,4 +507,69 @@ func TestProbeType(t *testing.T) {
 	if p.Type() != ProbeType || ProbeType != "tls" {
 		t.Errorf("Type() = %q, want tls", p.Type())
 	}
+}
+
+// blockingResolver never answers; it returns when the probe deadline fires.
+type blockingResolver struct{}
+
+func (blockingResolver) LookupNetIP(ctx context.Context, _, _ string) ([]netip.Addr, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// TestProbeTimeoutPhase covers the two attributions a standalone TLS probe can
+// make on a timeout: stuck resolving the name, or stuck in the handshake after
+// the TCP connection succeeded.
+func TestProbeTimeoutPhase(t *testing.T) {
+	t.Parallel()
+
+	t.Run("dns", func(t *testing.T) {
+		t.Parallel()
+		p, err := New(Options{Name: "dns-hang", Host: "hang.example", Port: 443, Timeout: 200 * time.Millisecond})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		p.resolver = blockingResolver{}
+		res := p.Probe(context.Background())
+		if !res.FailureReason.IsTimeout() {
+			t.Fatalf("reason = %q, want a timeout", res.FailureReason)
+		}
+		if res.TimeoutPhase != probe.PhaseDNS {
+			t.Errorf("phase = %q, want dns", res.TimeoutPhase)
+		}
+		if res.Timings.DNS < 150*time.Millisecond {
+			t.Errorf("dns timing = %v, want the time spent waiting", res.Timings.DNS)
+		}
+	})
+
+	t.Run("tls", func(t *testing.T) {
+		t.Parallel()
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("listening: %v", err)
+		}
+		done := make(chan struct{})
+		t.Cleanup(func() { close(done); _ = ln.Close() })
+		go func() {
+			for {
+				conn, aerr := ln.Accept()
+				if aerr != nil {
+					return
+				}
+				go func() { <-done; _ = conn.Close() }()
+			}
+		}()
+
+		addr := ln.Addr().(*net.TCPAddr)
+		res := runProbe(t, Options{
+			Name: "silent", Host: addr.IP.String(), Port: addr.Port,
+			Timeout: 200 * time.Millisecond, SkipVerify: true,
+		})
+		if !res.FailureReason.IsTimeout() {
+			t.Fatalf("reason = %q, want a timeout", res.FailureReason)
+		}
+		if res.TimeoutPhase != probe.PhaseTLS {
+			t.Errorf("phase = %q, want tls", res.TimeoutPhase)
+		}
+	})
 }
