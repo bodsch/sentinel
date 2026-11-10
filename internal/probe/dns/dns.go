@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"slices"
 	"strconv"
 	"strings"
@@ -60,6 +61,14 @@ type Options struct {
 	Expected []string
 	// Timeout is the total per-run timeout.
 	Timeout time.Duration
+	// Authoritative switches to the delegation check: Query is a zone, the
+	// first server is the resolver used to find its nameservers, and each
+	// nameserver is asked directly for the zone's SOA. Type and Expected are
+	// not used.
+	Authoritative bool
+	// Family selects the nameserver addresses queried in the authoritative
+	// check; empty means FamilyIPv4.
+	Family Family
 }
 
 // udpBufferSize is the EDNS0-advertised UDP receive buffer. Advertising a large
@@ -77,6 +86,12 @@ type Prober struct {
 	timeout   time.Duration
 	udpClient *dnslib.Client
 	tcpClient *dnslib.Client
+
+	authoritative bool
+	family        Family
+	// nsTarget maps a nameserver address to the "ip:port" it is queried at.
+	// Tests replace it to point at local servers.
+	nsTarget func(netip.Addr) string
 }
 
 var _ probe.Prober = (*Prober)(nil)
@@ -87,8 +102,19 @@ func New(opts Options) (*Prober, error) {
 		return nil, errors.New("dns probe: timeout must be greater than zero")
 	}
 	qtype, ok := typeCodes[strings.ToUpper(opts.Type)]
+	if opts.Authoritative {
+		qtype, ok = dnslib.TypeSOA, true
+	}
 	if !ok {
 		return nil, errors.New("dns probe: unsupported record type " + opts.Type)
+	}
+	family := opts.Family
+	switch family {
+	case "":
+		family = FamilyIPv4
+	case FamilyIPv4, FamilyIPv6, FamilyBoth:
+	default:
+		return nil, errors.New("dns probe: unsupported nameserver family " + string(opts.Family))
 	}
 	if len(opts.Servers) == 0 {
 		return nil, errors.New("dns probe: at least one server is required")
@@ -113,6 +139,10 @@ func New(opts Options) (*Prober, error) {
 		timeout:   opts.Timeout,
 		udpClient: &dnslib.Client{Net: "udp"},
 		tcpClient: &dnslib.Client{Net: "tcp"},
+
+		authoritative: opts.Authoritative,
+		family:        family,
+		nsTarget:      defaultNSTarget,
 	}, nil
 }
 
@@ -130,6 +160,10 @@ func (p *Prober) Type() string { return ProbeType }
 func (p *Prober) Probe(ctx context.Context) probe.Result {
 	ctx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
+
+	if p.authoritative {
+		return p.probeAuthoritative(ctx)
+	}
 
 	start := time.Now()
 	results := make([]ResolverResult, len(p.servers))
@@ -204,18 +238,27 @@ func (p *Prober) verdict(results []ResolverResult, consistent bool) probe.Failur
 	return probe.ReasonNone
 }
 
-// exchange queries one resolver, falling back to TCP on a truncated UDP
+// exchange queries one resolver for the target's own question.
+func (p *Prober) exchange(ctx context.Context, server string) ResolverResult {
+	return p.exchangeType(ctx, server, p.query, p.qtype, true)
+}
+
+// exchangeType sends one query, falling back to TCP on a truncated UDP
 // response.
 //
 // Parameters:
 //   - ctx: carries the probe deadline.
-//   - server: the resolver as "host:port".
+//   - server: the server as "host:port".
+//   - name: the fully-qualified name to ask for.
+//   - qtype: the record type.
+//   - recursion: whether to set the RD flag; off when asking an authoritative
+//     server directly, so its own data is what answers.
 //
-// It returns the resolver's result; Reason is ReasonNone only for a NOERROR
-// response.
-func (p *Prober) exchange(ctx context.Context, server string) ResolverResult {
+// It returns the result; Reason is ReasonNone only for a NOERROR response.
+func (p *Prober) exchangeType(ctx context.Context, server, name string, qtype uint16, recursion bool) ResolverResult {
 	msg := new(dnslib.Msg)
-	msg.SetQuestion(p.query, p.qtype)
+	msg.SetQuestion(name, qtype)
+	msg.RecursionDesired = recursion
 	// Advertise a larger UDP buffer so moderate answer sets arrive without
 	// truncation.
 	msg.SetEdns0(udpBufferSize, false)
@@ -239,9 +282,10 @@ func (p *Prober) exchange(ctx context.Context, server string) ResolverResult {
 		return out
 	}
 
+	out.msg = resp
 	out.ResponseCode = resp.Rcode
 	out.ResponseCodeText = dnslib.RcodeToString[resp.Rcode]
-	out.Answers = extractAnswers(resp, p.qtype)
+	out.Answers = extractAnswers(resp, qtype)
 	out.Truncated = truncated && resp.Truncated // true only if TCP was also truncated
 	if resp.Rcode != dnslib.RcodeSuccess {
 		out.Reason = probe.ReasonDNSError

@@ -29,6 +29,11 @@ type Collector struct {
 	resolverCode     *prometheus.Desc
 	resolverAnswers  *prometheus.Desc
 	consistent       *prometheus.Desc
+
+	nsDuration      *prometheus.Desc
+	nsCode          *prometheus.Desc
+	nsAuthoritative *prometheus.Desc
+	nsSerial        *prometheus.Desc
 }
 
 // NewCollector builds the DNS metrics collector over the given result source.
@@ -41,6 +46,10 @@ func NewCollector(results resultSource) *Collector {
 	resolverDesc := func(name, help string) *prometheus.Desc {
 		return prometheus.NewDesc(metrics.Namespace+"_"+name, help, perResolver, nil)
 	}
+	perNameserver := append(slices.Clone(base), "nameserver", "address")
+	nsDesc := func(name, help string) *prometheus.Desc {
+		return prometheus.NewDesc(metrics.Namespace+"_"+name, help, perNameserver, nil)
+	}
 	return &Collector{
 		results:       results,
 		queryDuration: desc("dns_query_duration_seconds", "Duration of the DNS query."),
@@ -50,7 +59,12 @@ func NewCollector(results resultSource) *Collector {
 		resolverDuration: resolverDesc("dns_resolver_query_duration_seconds", "Duration of the DNS query against one resolver; only for targets with several resolvers."),
 		resolverCode:     resolverDesc("dns_resolver_response_code", "DNS response code (RCODE) from one resolver; -1 when it produced no response."),
 		resolverAnswers:  resolverDesc("dns_resolver_answer_count", "Number of answer records of the queried type from one resolver."),
-		consistent:       desc("dns_answers_consistent", "1 when all resolvers of a multi-resolver target returned the same answer set, 0 otherwise."),
+		consistent:       desc("dns_answers_consistent", "1 when all resolvers (dns.servers) returned the same answer set, or all nameservers (dns.authoritative) the same SOA serial; 0 otherwise."),
+
+		nsDuration:      nsDesc("dns_nameserver_query_duration_seconds", "Duration of the direct SOA query against one address of one of the zone's nameservers."),
+		nsCode:          nsDesc("dns_nameserver_response_code", "DNS response code (RCODE) of a nameserver's SOA answer; -1 when it produced no response."),
+		nsAuthoritative: nsDesc("dns_nameserver_authoritative", "1 when the nameserver answered with authority (AA flag) and the zone's SOA, 0 otherwise."),
+		nsSerial:        nsDesc("dns_nameserver_soa_serial", "SOA serial a nameserver returned for the zone; absent without an answer."),
 	}
 }
 
@@ -63,6 +77,10 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.resolverCode
 	ch <- c.resolverAnswers
 	ch <- c.consistent
+	ch <- c.nsDuration
+	ch <- c.nsCode
+	ch <- c.nsAuthoritative
+	ch <- c.nsSerial
 }
 
 // Collect implements prometheus.Collector.
@@ -82,6 +100,10 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(c.responseCode, prometheus.GaugeValue, float64(diag.ResponseCode), labels...)
 		ch <- prometheus.MustNewConstMetric(c.answerCount, prometheus.GaugeValue, float64(diag.AnswerCount), labels...)
 
+		if len(diag.Nameservers) > 0 {
+			c.collectNameservers(ch, labels, diag)
+			continue
+		}
 		if len(diag.Resolvers) == 0 {
 			continue
 		}
@@ -99,6 +121,33 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 			ch <- prometheus.MustNewConstMetric(c.resolverDuration, prometheus.GaugeValue, r.Duration.Seconds(), rl...)
 			ch <- prometheus.MustNewConstMetric(c.resolverCode, prometheus.GaugeValue, code, rl...)
 			ch <- prometheus.MustNewConstMetric(c.resolverAnswers, prometheus.GaugeValue, float64(len(r.Answers)), rl...)
+		}
+	}
+}
+
+// collectNameservers emits the authoritative check's per-nameserver series and
+// the serial consistency verdict.
+func (c *Collector) collectNameservers(ch chan<- prometheus.Metric, labels []string, diag *Diagnostics) {
+	gauge := func(d *prometheus.Desc, v float64, lv []string) {
+		ch <- prometheus.MustNewConstMetric(d, prometheus.GaugeValue, v, lv...)
+	}
+	consistent := 0.0
+	if diag.Consistent {
+		consistent = 1
+	}
+	gauge(c.consistent, consistent, labels)
+
+	for _, ns := range diag.Nameservers {
+		lv := append(slices.Clone(labels), ns.Host, ns.Address)
+		gauge(c.nsDuration, ns.Duration.Seconds(), lv)
+		gauge(c.nsCode, float64(ns.ResponseCode), lv)
+		authoritative := 0.0
+		if ns.Authoritative && ns.HasSerial {
+			authoritative = 1
+		}
+		gauge(c.nsAuthoritative, authoritative, lv)
+		if ns.HasSerial {
+			gauge(c.nsSerial, float64(ns.Serial), lv)
 		}
 	}
 }

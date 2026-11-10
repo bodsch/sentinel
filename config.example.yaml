@@ -213,6 +213,20 @@ targets:
       query: example.org
       type: MX
 
+  # Zone delegation check: find the nameservers of the zone through `server`,
+  # ask each of them directly for the SOA. Fails with dns_lame_delegation when
+  # one answers without authority, dns_mismatch when the serials differ.
+  - name: dns-zone-example-org
+    interval: 5m
+    tags:
+      service: dns
+      environment: production
+    dns:
+      server: 1.1.1.1
+      query: example.org
+      authoritative: true
+      nameserver_family: ipv4   # ipv4 (default), ipv6 or both
+
   # DNS MX check (no expected values: success = NOERROR, count via metrics).
   - name: dns-mx-record
     interval: 1m

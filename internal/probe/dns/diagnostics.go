@@ -3,6 +3,8 @@ package dns
 import (
 	"time"
 
+	dnslib "github.com/miekg/dns"
+
 	"bodsch.me/sentinel/internal/probe"
 )
 
@@ -30,8 +32,14 @@ type Diagnostics struct {
 	// for a single-resolver target.
 	Resolvers []ResolverResult
 	// Consistent reports whether all resolvers that answered returned the same
-	// answer set. Always true for a single-resolver target.
+	// answer set — or, for the authoritative check, whether all nameservers
+	// returned the same SOA serial. True when there is nothing to compare.
 	Consistent bool
+	// Nameservers holds the per-address results of the authoritative check,
+	// sorted by host and address. Nil for an ordinary query. In that mode the
+	// top-level fields describe the NS lookup: Answers are the nameserver
+	// names.
+	Nameservers []NameserverResult
 }
 
 // ResolverResult is the outcome of the query against one resolver.
@@ -54,6 +62,8 @@ type ResolverResult struct {
 
 	// err is the transport error when the resolver produced no response.
 	err error
+	// msg is the response, for callers that need more than the answers.
+	msg *dnslib.Msg
 }
 
 // ProbeType implements probe.Diagnostics.

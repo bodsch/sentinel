@@ -324,7 +324,13 @@ Planned:
   for such targets, so single-resolver targets are unchanged. Failover
   semantics ("succeed if any answers") were deliberately not added: they hide
   exactly the broken resolver this is meant to find.
-- authoritative server checks
+- ~~authoritative server checks~~ **(implemented)**: `dns.authoritative`
+  finds a zone's nameservers through the configured resolver and asks every
+  address directly, without recursion, for the SOA. A server answering without
+  authority or with REFUSED fails with the new reason `dns_lame_delegation`,
+  differing serials with `dns_mismatch`. Per-nameserver series include the
+  serial. Only IPv4 addresses by default (`nameserver_family: both` adds IPv6),
+  so a host without an IPv6 route does not fail permanently.
 
 ---
 

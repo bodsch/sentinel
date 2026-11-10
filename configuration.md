@@ -618,8 +618,8 @@ targets:
         - 93.184.216.34
 ```
 
-Supported record types: **A, AAAA, MX, TXT, CNAME, SRV**. (DNSSEC validation
-remains future work.)
+Supported record types: **A, AAAA, MX, TXT, CNAME, SRV**; SOA through the
+authoritative check below. (DNSSEC validation remains future work.)
 
 CNAME and SRV examples:
 
@@ -697,6 +697,47 @@ The probe takes as long as the slowest resolver. `sentinel_dns_*` keeps
 describing the first resolver (the duration is the whole probe), and each
 resolver gets its own series with a `resolver` label — see `metrics.md` →
 *DNS Metrics*. `server: x` behaves exactly like before and adds no series.
+
+### Checking a zone's nameservers
+
+`authoritative: true` checks the delegation of a zone instead of resolving a
+name:
+
+```
+targets:
+  - name: zone-example-org
+    interval: 5m
+    dns:
+      server: 1.1.1.1            # resolver used to find the nameservers
+      query: example.org         # the zone
+      authoritative: true
+      nameserver_family: ipv4    # ipv4 (default), ipv6 or both
+```
+
+1. The NS records of the zone are looked up through `server`.
+2. Every nameserver name is resolved through `server` (up to four addresses
+   per name and family; at most 16 nameservers).
+3. Every address is asked **directly and without recursion** for the zone's
+   SOA.
+
+The target succeeds only when every address answers with authority (AA flag)
+and the zone's SOA, and all serials are equal. The first failure wins, in this
+order:
+
+| Reason | Meaning |
+|---|---|
+| `dns_error` / `timeout` | NS lookup failed, the name is no zone apex (no NS records), a nameserver name does not resolve in the selected family, or an address did not answer or answered with an error such as SERVFAIL |
+| `dns_lame_delegation` | an address answered without authority, without the SOA, or with REFUSED — the delegation points at a server that does not serve the zone |
+| `dns_mismatch` | the SOA serials differ — a secondary has not picked up the latest zone transfer |
+
+`type` must be unset (it becomes `SOA`); `servers` and `expected` are not
+allowed. `nameserver_family` defaults to `ipv4` so a monitoring host without an
+IPv6 route does not fail permanently; set `both` where IPv6 works, because a
+nameserver can be broken on one family only. A nameserver without an address
+in the selected family fails with `dns_error` rather than being skipped.
+
+Each queried address gets its own series (`nameserver`, `address` labels),
+including the serial — see `metrics.md` → *DNS Metrics*.
 
 ---
 

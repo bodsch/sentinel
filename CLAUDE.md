@@ -15,7 +15,8 @@ er langsam/nicht erreichbar?" — über phasengenaue Diagnostik (DNS/TCP/TLS/TTF
 - aktives, kontinuierliches Verproben konfigurierter Targets (entkoppelt vom Prometheus-Scrape)
 - HTTP/HTTPS-Probes mit phasengenauem Timing (DNS, TCP, TLS, TTFB, Download), Methoden
   GET/HEAD/POST/PUT/PATCH/DELETE, Request-Body, Custom-Headern und Basic/Bearer-Auth
-- DNS-Probe (A/AAAA/MX/TXT/CNAME/SRV, optional mehrere Resolver im Vergleich), TCP-Probe (Connect + optionale Banner-Validierung) und
+- DNS-Probe (A/AAAA/MX/TXT/CNAME/SRV, optional mehrere Resolver im Vergleich, Zonen-Check der
+  Nameserver auf Autorität und SOA-Serial), TCP-Probe (Connect + optionale Banner-Validierung) und
   TLS-Probe für beliebige Endpunkte, die direkt TLS sprechen (LDAPS, SMTPS, IMAPS, MQTT …)
   oder per STARTTLS upgraden (SMTP, IMAP, POP3, LDAP)
 - Response-Validierung (Status-Code, Body-Regex, Header, JSONPath)

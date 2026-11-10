@@ -161,8 +161,15 @@ func validateDNS(label string, d *DNSConfig) []error {
 		errs = append(errs, fmt.Errorf("config: %s: dns.query is required", label))
 	}
 
-	if _, ok := AllowedDNSTypes[d.Type]; !ok {
-		errs = append(errs, fmt.Errorf("config: %s: dns.type %q is not supported (allowed: %s)", label, d.Type, allowedDNSTypesList()))
+	if d.Authoritative {
+		errs = append(errs, validateDNSAuthoritative(label, d)...)
+	} else {
+		if _, ok := AllowedDNSTypes[d.Type]; !ok {
+			errs = append(errs, fmt.Errorf("config: %s: dns.type %q is not supported (allowed: %s)", label, d.Type, allowedDNSTypesList()))
+		}
+		if d.NameserverFamily != "" {
+			errs = append(errs, fmt.Errorf("config: %s: dns.nameserver_family is only valid with dns.authoritative", label))
+		}
 	}
 
 	for _, e := range d.Expected {
@@ -182,6 +189,28 @@ func validateDNS(label string, d *DNSConfig) []error {
 		}
 	}
 
+	return errs
+}
+
+// validateDNSAuthoritative checks the settings specific to the delegation
+// check: a single discovery resolver, type SOA, no expected values and a known
+// nameserver family.
+func validateDNSAuthoritative(label string, d *DNSConfig) []error {
+	var errs []error
+	if len(d.Servers) > 0 {
+		errs = append(errs, fmt.Errorf("config: %s: dns.authoritative uses dns.server to find the nameservers; dns.servers is not allowed", label))
+	}
+	if d.Type != "SOA" {
+		errs = append(errs, fmt.Errorf("config: %s: dns.authoritative queries SOA; dns.type %q is not allowed (leave it unset)", label, d.Type))
+	}
+	if len(d.Expected) > 0 {
+		errs = append(errs, fmt.Errorf("config: %s: dns.expected is not allowed with dns.authoritative (the nameservers are compared with each other)", label))
+	}
+	if d.NameserverFamily != "" {
+		if _, ok := AllowedNameserverFamilies[d.NameserverFamily]; !ok {
+			errs = append(errs, fmt.Errorf("config: %s: dns.nameserver_family %q is not supported (allowed: %s)", label, d.NameserverFamily, sortedKeys(AllowedNameserverFamilies)))
+		}
+	}
 	return errs
 }
 

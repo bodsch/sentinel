@@ -106,6 +106,36 @@ func TestDNSValidationErrors(t *testing.T) {
 			wantSub: "dns.servers has 11 entries, at most 10 are allowed",
 		},
 		{
+			name:    "authoritative with servers",
+			yaml:    "targets:\n  - name: x\n    dns:\n      servers: [1.1.1.1, 9.9.9.9]\n      query: example.org\n      authoritative: true\n",
+			wantSub: "dns.servers is not allowed",
+		},
+		{
+			name:    "authoritative with another type",
+			yaml:    "targets:\n  - name: x\n    dns:\n      server: 1.1.1.1\n      query: example.org\n      type: A\n      authoritative: true\n",
+			wantSub: "dns.type \"A\" is not allowed",
+		},
+		{
+			name:    "authoritative with expected",
+			yaml:    "targets:\n  - name: x\n    dns:\n      server: 1.1.1.1\n      query: example.org\n      authoritative: true\n      expected: [\"1\"]\n",
+			wantSub: "dns.expected is not allowed with dns.authoritative",
+		},
+		{
+			name:    "authoritative unknown family",
+			yaml:    "targets:\n  - name: x\n    dns:\n      server: 1.1.1.1\n      query: example.org\n      authoritative: true\n      nameserver_family: ipv5\n",
+			wantSub: "dns.nameserver_family \"ipv5\" is not supported (allowed: both, ipv4, ipv6)",
+		},
+		{
+			name:    "family without authoritative",
+			yaml:    "targets:\n  - name: x\n    dns:\n      server: 1.1.1.1\n      query: example.org\n      nameserver_family: both\n",
+			wantSub: "dns.nameserver_family is only valid with dns.authoritative",
+		},
+		{
+			name:    "soa without authoritative",
+			yaml:    "targets:\n  - name: x\n    dns:\n      server: 1.1.1.1\n      query: example.org\n      type: SOA\n",
+			wantSub: "dns.type \"SOA\" is not supported",
+		},
+		{
 			name:    "both http and dns",
 			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n    dns:\n      server: 1.1.1.1\n      query: a.example\n",
 			wantSub: "multiple protocol blocks",
@@ -215,5 +245,34 @@ targets:
 	want := []string{"1.1.1.1", "9.9.9.9:53", "[2620:fe::fe]:53"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("servers resolved to %v, want %v", got, want)
+	}
+}
+
+func TestDNSAuthoritativeDefaults(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseResolve(t, `
+targets:
+  - name: zone
+    dns:
+      server: 1.1.1.1
+      query: example.org
+      authoritative: true
+  - name: zone-both
+    dns:
+      server: 1.1.1.1
+      query: example.org
+      type: soa
+      authoritative: true
+      nameserver_family: " BOTH "
+`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if d := cfg.Targets[0].DNS; d.Type != "SOA" || d.NameserverFamily != "" {
+		t.Errorf("defaults = type %q family %q, want SOA and unset (ipv4)", d.Type, d.NameserverFamily)
+	}
+	if d := cfg.Targets[1].DNS; d.Type != "SOA" || d.NameserverFamily != "both" {
+		t.Errorf("normalised = type %q family %q, want SOA/both", d.Type, d.NameserverFamily)
 	}
 }

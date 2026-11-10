@@ -34,7 +34,11 @@ func TestExampleConfigIsValid(t *testing.T) {
 				t.Errorf("target %q resolved to unexpected method %q", tg.Name, tg.HTTP.Method)
 			}
 		case tg.DNS != nil:
-			if _, ok := AllowedDNSTypes[tg.DNS.Type]; !ok {
+			if tg.DNS.Authoritative {
+				if tg.DNS.Type != "SOA" {
+					t.Errorf("authoritative target %q resolved to DNS type %q, want SOA", tg.Name, tg.DNS.Type)
+				}
+			} else if _, ok := AllowedDNSTypes[tg.DNS.Type]; !ok {
 				t.Errorf("target %q resolved to unexpected DNS type %q", tg.Name, tg.DNS.Type)
 			}
 		case tg.TCP != nil:
