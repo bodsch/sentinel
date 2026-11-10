@@ -206,6 +206,9 @@ func validateDNSAuthoritative(label string, d *DNSConfig) []error {
 	if len(d.Expected) > 0 {
 		errs = append(errs, fmt.Errorf("config: %s: dns.expected is not allowed with dns.authoritative (the nameservers are compared with each other)", label))
 	}
+	if d.DNSSEC {
+		errs = append(errs, fmt.Errorf("config: %s: dns.dnssec is not allowed with dns.authoritative (authoritative servers do not validate; check the zone through a validating resolver instead)", label))
+	}
 	if d.NameserverFamily != "" {
 		if _, ok := AllowedNameserverFamilies[d.NameserverFamily]; !ok {
 			errs = append(errs, fmt.Errorf("config: %s: dns.nameserver_family %q is not supported (allowed: %s)", label, d.NameserverFamily, sortedKeys(AllowedNameserverFamilies)))

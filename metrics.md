@@ -206,6 +206,8 @@ dns_mismatch
 
 dns_lame_delegation
 
+dnssec_unvalidated
+
 tcp_timeout
 
 connection_refused
@@ -680,6 +682,22 @@ max by (target) (sentinel_dns_resolver_answer_count)
 ```
 
 A resolver that stopped answering shows as `sentinel_dns_resolver_response_code == -1`.
+
+---
+
+### DNSSEC (`dns.dnssec` only)
+
+```
+sentinel_dns_dnssec_validated                # 1 = every resolver set the AD flag
+sentinel_dns_rrsig_expiry_timestamp_seconds  # earliest RRSIG expiry over the queried type
+```
+
+The expiry series is absent when no signature was returned. Alert when the
+signer has stopped re-signing:
+
+```
+sentinel_dns_rrsig_expiry_timestamp_seconds - time() < 3 * 86400
+```
 
 ---
 

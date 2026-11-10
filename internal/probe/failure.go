@@ -51,6 +51,12 @@ const (
 	// a server that does not serve the zone.
 	ReasonDNSLameDelegation FailureReason = "dns_lame_delegation"
 
+	// ReasonDNSSECUnvalidated means a DNS target that requires DNSSEC got an
+	// answer without the AD flag: the zone is unsigned, or the resolver does
+	// not validate. A bogus signature does not land here — a validating
+	// resolver answers SERVFAIL, which is dns_error.
+	ReasonDNSSECUnvalidated FailureReason = "dnssec_unvalidated"
+
 	// ReasonStartTLSFailed means the server answered the STARTTLS dialogue but
 	// did not agree to upgrade: a refusing greeting, STARTTLS not offered, a
 	// negative reply, or a malformed or oversized response. A network failure
@@ -68,6 +74,7 @@ var allReasons = map[FailureReason]struct{}{
 	ReasonDNSError:            {},
 	ReasonDNSMismatch:         {},
 	ReasonDNSLameDelegation:   {},
+	ReasonDNSSECUnvalidated:   {},
 	ReasonTCPTimeout:          {},
 	ReasonConnectionRefused:   {},
 	ReasonTLSError:            {},

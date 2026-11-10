@@ -69,6 +69,10 @@ type Options struct {
 	// Family selects the nameserver addresses queried in the authoritative
 	// check; empty means FamilyIPv4.
 	Family Family
+	// DNSSEC requires every resolver to vouch for the answer with the AD flag:
+	// queries carry the DO bit, and a response without AD fails with
+	// dnssec_unvalidated. Not used by the authoritative check.
+	DNSSEC bool
 }
 
 // udpBufferSize is the EDNS0-advertised UDP receive buffer. Advertising a large
@@ -89,6 +93,7 @@ type Prober struct {
 
 	authoritative bool
 	family        Family
+	dnssec        bool
 	// nsTarget maps a nameserver address to the "ip:port" it is queried at.
 	// Tests replace it to point at local servers.
 	nsTarget func(netip.Addr) string
@@ -142,6 +147,7 @@ func New(opts Options) (*Prober, error) {
 
 		authoritative: opts.Authoritative,
 		family:        family,
+		dnssec:        opts.DNSSEC && !opts.Authoritative,
 		nsTarget:      defaultNSTarget,
 	}, nil
 }
@@ -155,8 +161,9 @@ func (p *Prober) Type() string { return ProbeType }
 //
 // The verdict is the first failure in this order: a resolver that could not be
 // queried or answered with a non-NOERROR code (resolvers checked in configured
-// order), a resolver whose answers miss the expected set, answer sets that
-// differ between resolvers (dns_mismatch).
+// order), with dnssec a response without the AD flag (dnssec_unvalidated), a
+// resolver whose answers miss the expected set, answer sets that differ
+// between resolvers (dns_mismatch).
 func (p *Prober) Probe(ctx context.Context) probe.Result {
 	ctx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
@@ -202,6 +209,9 @@ func (p *Prober) Probe(ctx context.Context) probe.Result {
 		Truncated:        primary.Truncated,
 		Consistent:       true,
 	}
+	if p.dnssec {
+		diag.DNSSEC = dnssecSummary(results)
+	}
 	if len(results) > 1 {
 		diag.Resolvers = results
 		diag.Consistent = sameAnswers(results, p.qtype)
@@ -220,6 +230,15 @@ func (p *Prober) verdict(results []ResolverResult, consistent bool) probe.Failur
 	for _, r := range results {
 		if r.Reason != probe.ReasonNone {
 			return r.Reason
+		}
+	}
+	// An answer nobody vouched for is not worth comparing: with dnssec set it
+	// fails before its content is looked at.
+	if p.dnssec {
+		for _, r := range results {
+			if !r.Authenticated {
+				return probe.ReasonDNSSECUnvalidated
+			}
 		}
 	}
 	// Without an expected set, a NOERROR response is a success even with zero
@@ -260,8 +279,13 @@ func (p *Prober) exchangeType(ctx context.Context, server, name string, qtype ui
 	msg.SetQuestion(name, qtype)
 	msg.RecursionDesired = recursion
 	// Advertise a larger UDP buffer so moderate answer sets arrive without
-	// truncation.
-	msg.SetEdns0(udpBufferSize, false)
+	// truncation. With dnssec, the DO bit asks for the signatures and the AD
+	// bit announces that the client understands it (RFC 6840 section 5.7), so
+	// a validating resolver reports its verdict.
+	msg.SetEdns0(udpBufferSize, p.dnssec && recursion)
+	if p.dnssec && recursion {
+		msg.AuthenticatedData = true
+	}
 
 	out := ResolverResult{Server: server}
 	start := time.Now()
@@ -286,6 +310,8 @@ func (p *Prober) exchangeType(ctx context.Context, server, name string, qtype ui
 	out.ResponseCode = resp.Rcode
 	out.ResponseCodeText = dnslib.RcodeToString[resp.Rcode]
 	out.Answers = extractAnswers(resp, qtype)
+	out.Authenticated = resp.AuthenticatedData
+	out.SignatureExpiry = earliestSignatureExpiry(resp, qtype)
 	out.Truncated = truncated && resp.Truncated // true only if TCP was also truncated
 	if resp.Rcode != dnslib.RcodeSuccess {
 		out.Reason = probe.ReasonDNSError

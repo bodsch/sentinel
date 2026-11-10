@@ -266,6 +266,11 @@ type DNSConfig struct {
 	// authority and the same serial. Type must be unset or SOA; Expected and
 	// Servers are not allowed.
 	Authoritative bool `yaml:"authoritative"`
+	// DNSSEC requires the resolver(s) to vouch for the answer with the AD flag
+	// (queries carry the DO bit). A response without it fails with
+	// dnssec_unvalidated. Only meaningful against a validating resolver; not
+	// allowed with Authoritative.
+	DNSSEC bool `yaml:"dnssec"`
 	// NameserverFamily selects which nameserver addresses the authoritative
 	// check queries: "ipv4" (default), "ipv6" or "both". Normalised to
 	// lowercase on load.

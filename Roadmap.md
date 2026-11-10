@@ -96,7 +96,14 @@ Implemented:
 
 Planned:
 
-- DNSSEC validation
+- ~~DNSSEC validation~~ **(implemented, resolver-trusting)**: `dns.dnssec`
+  sends the DO bit and requires the AD flag from the resolver; a missing flag
+  fails with the new reason `dnssec_unvalidated`, a bogus signature arrives as
+  SERVFAIL (`dns_error`). The earliest RRSIG expiry over the queried type is
+  exported, so a signer that stopped re-signing shows up before the zone
+  breaks. Validating the chain to the root trust anchor inside Sentinel was
+  considered and declined: it duplicates the validating resolver and adds
+  trust-anchor maintenance.
 
 ---
 
