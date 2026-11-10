@@ -188,9 +188,11 @@ Planned:
   `configuration.md`.
 - ~~authentication~~ **(implemented)**: `http.basic_auth` and `http.bearer_token`
   (mutually exclusive with each other and an explicit Authorization header),
-  applied same-host-only for leak safety. Secrets are inline; **planned
-  follow-up**: `password_file` / `bearer_token_file` (and/or env references) so
-  credentials need not live in the config and `--validate` can run without them.
+  applied same-host-only for leak safety. ~~File-based secrets~~
+  **(implemented)**: `basic_auth.password_file` / `bearer_token_file`, read once
+  at startup; `--validate` does not open them, so a CI dry-run needs no access
+  to the secrets. Environment-variable references were not added — a file covers
+  systemd credentials and Kubernetes secrets alike.
 - ~~JSONPath validation~~ **(implemented)**: `http.expect.json` — a list of
   `{path, equals}` JSONPath assertions on a JSON response body (existence and
   scalar equality), via `github.com/ohler55/ojg` (zero transitive deps). See
@@ -354,9 +356,10 @@ therefore still passes; the line in its output is expected, not a regression.
 
 Planned:
 
-- signed release artifacts (checksums are published today; signing/attestation is
-  the next step)
-- SBOM generation on release
+- ~~signed release artifacts, SBOM generation on release~~ **(declined)**: the
+  published `SHA256SUMS` are sufficient for the current distribution model;
+  signing/attestation and an SBOM add pipeline complexity without a consumer
+  that would verify them.
 - container image + image scanning
 
 ---

@@ -117,7 +117,7 @@ Supported features:
 
 - methods GET / HEAD / POST / PUT / PATCH / DELETE
 - request body (`http.body`) and custom request headers (`http.headers`)
-- Basic auth (`http.basic_auth`) and bearer token (`http.bearer_token`)
+- Basic auth (`http.basic_auth`) and bearer token (`http.bearer_token`), inline or from a file (`password_file` / `bearer_token_file`)
 - per-target response body-size cap (`http.max_body_bytes`, `0` = uncapped)
 - status code validation
 - header validation

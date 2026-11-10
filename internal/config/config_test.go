@@ -183,6 +183,36 @@ targets:
 	}
 }
 
+// TestHTTPSecretFilesValidWithoutFiles pins the promise behind password_file and
+// bearer_token_file: validation accepts paths that do not exist, so a CI dry-run
+// (--validate) needs no access to the secrets. The files are read at startup.
+func TestHTTPSecretFilesValidWithoutFiles(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseResolve(t, `
+targets:
+  - name: basic-from-file
+    http:
+      url: https://a.example
+      basic_auth:
+        username: alice
+        password_file: /nonexistent/sentinel/password
+  - name: bearer-from-file
+    http:
+      url: https://b.example
+      bearer_token_file: /nonexistent/sentinel/token
+`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := cfg.Targets[0].HTTP.BasicAuth.PasswordFile; got != "/nonexistent/sentinel/password" {
+		t.Errorf("password_file = %q", got)
+	}
+	if got := cfg.Targets[1].HTTP.BearerTokenFile; got != "/nonexistent/sentinel/token" {
+		t.Errorf("bearer_token_file = %q", got)
+	}
+}
+
 func TestHTTPMethodAndBodyValid(t *testing.T) {
 	t.Parallel()
 
@@ -345,6 +375,26 @@ func TestValidationErrors(t *testing.T) {
 		{
 			name:    "basic_auth and bearer_token both set",
 			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n      bearer_token: t\n      basic_auth:\n        username: u\n        password: p\n",
+			wantSub: "at most one of",
+		},
+		{
+			name:    "password and password_file both set",
+			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n      basic_auth:\n        username: u\n        password: p\n        password_file: /run/secrets/p\n",
+			wantSub: "password and password_file are mutually exclusive",
+		},
+		{
+			name:    "bearer_token and bearer_token_file both set",
+			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n      bearer_token: t\n      bearer_token_file: /run/secrets/t\n",
+			wantSub: "bearer_token and bearer_token_file are mutually exclusive",
+		},
+		{
+			name:    "basic_auth and bearer_token_file both set",
+			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n      bearer_token_file: /run/secrets/t\n      basic_auth:\n        username: u\n        password_file: /run/secrets/p\n",
+			wantSub: "at most one of",
+		},
+		{
+			name:    "auth header and bearer_token_file both set",
+			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n      bearer_token_file: /run/secrets/t\n      headers:\n        Authorization: Bearer other\n",
 			wantSub: "at most one of",
 		},
 		{
