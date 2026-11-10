@@ -375,7 +375,7 @@ func dnsOptions(target config.Target) dnsprobe.Options {
 	d := target.DNS
 	return dnsprobe.Options{
 		Name:     target.Name,
-		Server:   d.Server,
+		Servers:  d.ResolvedServers(),
 		Query:    d.Query,
 		Type:     d.Type,
 		Expected: d.Expected,

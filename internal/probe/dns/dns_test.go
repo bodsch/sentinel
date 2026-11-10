@@ -74,7 +74,7 @@ func answerHandler(t *testing.T, rrLines ...string) dnslib.HandlerFunc {
 }
 
 func opts(server, query, typ string, expected ...string) Options {
-	return Options{Name: "t", Server: server, Query: query, Type: typ, Expected: expected, Timeout: 3 * time.Second}
+	return Options{Name: "t", Servers: []string{server}, Query: query, Type: typ, Expected: expected, Timeout: 3 * time.Second}
 }
 
 func run(t *testing.T, o Options) probe.Result {

@@ -53,7 +53,7 @@ func TestDNSValidationErrors(t *testing.T) {
 		{
 			name:    "missing server",
 			yaml:    "targets:\n  - name: x\n    dns:\n      query: example.org\n",
-			wantSub: "dns.server is required",
+			wantSub: "dns.server (or dns.servers) is required",
 		},
 		{
 			name:    "missing query",
@@ -84,6 +84,26 @@ func TestDNSValidationErrors(t *testing.T) {
 			name:    "empty expected value",
 			yaml:    "targets:\n  - name: x\n    dns:\n      server: 1.1.1.1\n      query: example.org\n      expected:\n        - \"\"\n",
 			wantSub: "dns.expected must not contain empty values",
+		},
+		{
+			name:    "server and servers together",
+			yaml:    "targets:\n  - name: x\n    dns:\n      server: 1.1.1.1\n      servers: [8.8.8.8]\n      query: example.org\n",
+			wantSub: "dns.server and dns.servers are mutually exclusive",
+		},
+		{
+			name:    "servers entry invalid",
+			yaml:    "targets:\n  - name: x\n    dns:\n      servers: [1.1.1.1, \"http://nope\"]\n      query: example.org\n",
+			wantSub: "dns.servers[1] \"http://nope\" is not a valid host or host:port",
+		},
+		{
+			name:    "servers duplicate with explicit default port",
+			yaml:    "targets:\n  - name: x\n    dns:\n      servers: [1.1.1.1, \"1.1.1.1:53\"]\n      query: example.org\n",
+			wantSub: "dns.servers[1] \"1.1.1.1:53\" repeats dns.servers[0]",
+		},
+		{
+			name:    "servers too many",
+			yaml:    "targets:\n  - name: x\n    dns:\n      servers: [10.0.0.1, 10.0.0.2, 10.0.0.3, 10.0.0.4, 10.0.0.5, 10.0.0.6, 10.0.0.7, 10.0.0.8, 10.0.0.9, 10.0.0.10, 10.0.0.11]\n      query: example.org\n",
+			wantSub: "dns.servers has 11 entries, at most 10 are allowed",
 		},
 		{
 			name:    "both http and dns",
@@ -168,5 +188,32 @@ func TestDNSSRVFormatOnlyCheckedForSRV(t *testing.T) {
 	_, err := parseResolve(t, "targets:\n  - name: x\n    dns:\n      server: 1.1.1.1\n      query: example.org\n      type: TXT\n      expected: [\"10 5 not-srv\"]\n")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDNSResolvedServers(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseResolve(t, `
+targets:
+  - name: single
+    dns:
+      server: 1.1.1.1
+      query: example.org
+  - name: compare
+    dns:
+      servers: [" 1.1.1.1 ", "9.9.9.9:53", "[2620:fe::fe]:53"]
+      query: example.org
+`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := cfg.Targets[0].DNS.ResolvedServers(); len(got) != 1 || got[0] != "1.1.1.1" {
+		t.Errorf("single server resolved to %v, want [1.1.1.1]", got)
+	}
+	got := cfg.Targets[1].DNS.ResolvedServers()
+	want := []string{"1.1.1.1", "9.9.9.9:53", "[2620:fe::fe]:53"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("servers resolved to %v, want %v", got, want)
 	}
 }

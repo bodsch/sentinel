@@ -661,6 +661,43 @@ Behaviour:
 - A query of type A/AAAA that is answered through a CNAME chain reports only
   the address records; query type CNAME to watch the alias itself.
 
+### Comparing resolvers
+
+`servers` (instead of `server`) queries several resolvers in parallel and
+compares them:
+
+```
+targets:
+  - name: www-everywhere
+    dns:
+      servers: [10.0.0.53, 1.1.1.1, 9.9.9.9]   # at most 10, no duplicates
+      query: www.example.org
+      type: A
+```
+
+The target succeeds only when **every** resolver answers NOERROR, every one
+satisfies `expected` (when set), and all return the **same answer set**.
+Otherwise the first failure in this order wins: a resolver that did not answer
+or answered with an error code (`timeout`, `dns_error`, checked in configured
+order), a resolver missing the expected values (`validation_failed`), differing
+answer sets (`dns_mismatch`).
+
+The sets are compared as sets: order, duplicates, TTLs, the case of host names
+and the spelling of IPv6 addresses do not count as a difference. A resolver
+returning NOERROR with no records *is* a difference — that is what a stale
+negative cache looks like. This catches an internal resolver still serving an
+old address, a split-horizon zone leaking, or a change that has not reached
+every resolver yet.
+
+Do not compare names whose answers legitimately vary — round-robin subsets or
+geo-DNS return different sets by design and would fail with `dns_mismatch`
+every few runs. For those, use one target per resolver with `expected`.
+
+The probe takes as long as the slowest resolver. `sentinel_dns_*` keeps
+describing the first resolver (the duration is the whole probe), and each
+resolver gets its own series with a `resolver` label — see `metrics.md` →
+*DNS Metrics*. `server: x` behaves exactly like before and adds no series.
+
 ---
 
 ## TCP Configuration

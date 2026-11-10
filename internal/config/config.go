@@ -247,7 +247,11 @@ type JSONExpect struct {
 // resolver, optionally validated against expected answers.
 type DNSConfig struct {
 	// Server is the resolver to query, "host" or "host:port" (default port 53).
+	// Mutually exclusive with Servers.
 	Server string `yaml:"server"`
+	// Servers are several resolvers to query and compare: each must answer,
+	// and all must return the same answer set. Mutually exclusive with Server.
+	Servers []string `yaml:"servers"`
 	// Query is the name to look up (e.g. "example.org").
 	Query string `yaml:"query"`
 	// Type is the record type: A, AAAA, MX, TXT, CNAME or SRV. Defaults to A.
@@ -304,6 +308,19 @@ type TLSProbeConfig struct {
 	StartTLS string `yaml:"starttls"`
 
 	TLSConfig `yaml:",inline"`
+}
+
+// ResolvedServers returns the resolvers to query: Servers when set, otherwise
+// the single Server. Entries are trimmed.
+func (d *DNSConfig) ResolvedServers() []string {
+	if len(d.Servers) > 0 {
+		out := make([]string, 0, len(d.Servers))
+		for _, s := range d.Servers {
+			out = append(out, strings.TrimSpace(s))
+		}
+		return out
+	}
+	return []string{strings.TrimSpace(d.Server)}
 }
 
 // Endpoint returns the "host:port" address the probe connects to.

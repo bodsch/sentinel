@@ -199,6 +199,20 @@ targets:
       expected:
         - 93.184.216.34
 
+  # Resolver comparison: query several resolvers in parallel; succeeds only
+  # when all answer NOERROR with the same answer set (otherwise dns_mismatch).
+  # Catches stale caches and split-horizon leaks. Not for round-robin or
+  # geo-DNS names, whose answers vary by design.
+  - name: dns-resolver-compare
+    interval: 1m
+    tags:
+      service: dns
+      environment: production
+    dns:
+      servers: [1.1.1.1, 9.9.9.9, "8.8.8.8:53"]
+      query: example.org
+      type: MX
+
   # DNS MX check (no expected values: success = NOERROR, count via metrics).
   - name: dns-mx-record
     interval: 1m

@@ -317,8 +317,13 @@ Planned:
 Planned:
 
 - DNSSEC validation
-- resolver comparison
-- multiple resolver
+- ~~resolver comparison, multiple resolvers~~ **(implemented)**: `dns.servers`
+  queries up to ten resolvers in parallel; every one must answer NOERROR and all
+  must return the same answer set, otherwise the new failure reason
+  `dns_mismatch`. Per-resolver series carry a `resolver` label and exist only
+  for such targets, so single-resolver targets are unchanged. Failover
+  semantics ("succeed if any answers") were deliberately not added: they hide
+  exactly the broken resolver this is meant to find.
 - authoritative server checks
 
 ---

@@ -1,5 +1,10 @@
-// Package dns implements the DNS probe: it queries a configured resolver for a
-// record and validates the response.
+// Package dns implements the DNS probe: it queries one or more configured
+// resolvers for a record and validates the responses.
+//
+// With several resolvers the probe compares them: every resolver must answer,
+// and all of them must return the same answer set. That catches what a single
+// resolver cannot show — a stale cache, a split-horizon leak, an unfinished
+// propagation — while the per-resolver metrics say which one is off.
 //
 // It uses github.com/miekg/dns for full control over the query — a specific
 // resolver, the record type, the response RCODE and the answer set — which the
@@ -11,8 +16,10 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	dnslib "github.com/miekg/dns"
@@ -40,8 +47,9 @@ var typeCodes = map[string]uint16{
 type Options struct {
 	// Name is the target name (for reference/logging).
 	Name string
-	// Server is the resolver, "host" or "host:port" (port defaults to 53).
-	Server string
+	// Servers are the resolvers to query, each "host" or "host:port" (port
+	// defaults to 53). With more than one, their answers are compared.
+	Servers []string
 	// Query is the name to look up.
 	Query string
 	// Type is the record type: A, AAAA, MX, TXT, CNAME or SRV (already
@@ -62,7 +70,7 @@ const udpBufferSize = 4096
 // Prober runs DNS checks for a single target. It satisfies probe.Prober.
 type Prober struct {
 	name      string
-	server    string
+	servers   []string
 	query     string
 	qtype     uint16
 	expected  []string
@@ -82,8 +90,15 @@ func New(opts Options) (*Prober, error) {
 	if !ok {
 		return nil, errors.New("dns probe: unsupported record type " + opts.Type)
 	}
-	if strings.TrimSpace(opts.Server) == "" {
-		return nil, errors.New("dns probe: server is required")
+	if len(opts.Servers) == 0 {
+		return nil, errors.New("dns probe: at least one server is required")
+	}
+	servers := make([]string, 0, len(opts.Servers))
+	for _, srv := range opts.Servers {
+		if strings.TrimSpace(srv) == "" {
+			return nil, errors.New("dns probe: server must not be empty")
+		}
+		servers = append(servers, withDefaultPort(strings.TrimSpace(srv)))
 	}
 	if strings.TrimSpace(opts.Query) == "" {
 		return nil, errors.New("dns probe: query is required")
@@ -91,7 +106,7 @@ func New(opts Options) (*Prober, error) {
 
 	return &Prober{
 		name:      opts.Name,
-		server:    withDefaultPort(opts.Server),
+		servers:   servers,
 		query:     dnslib.Fqdn(opts.Query),
 		qtype:     qtype,
 		expected:  opts.Expected,
@@ -104,39 +119,40 @@ func New(opts Options) (*Prober, error) {
 // Type implements probe.Prober.
 func (p *Prober) Type() string { return ProbeType }
 
-// Probe implements probe.Prober. It performs the query under the target's total
-// timeout and classifies the outcome. It never returns an error: a failed check
-// is a successful execution with Success=false.
+// Probe implements probe.Prober. It queries every resolver concurrently under
+// the target's total timeout and classifies the outcome. It never returns an
+// error: a failed check is a successful execution with Success=false.
+//
+// The verdict is the first failure in this order: a resolver that could not be
+// queried or answered with a non-NOERROR code (resolvers checked in configured
+// order), a resolver whose answers miss the expected set, answer sets that
+// differ between resolvers (dns_mismatch).
 func (p *Prober) Probe(ctx context.Context) probe.Result {
 	ctx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
 
-	msg := new(dnslib.Msg)
-	msg.SetQuestion(p.query, p.qtype)
-	// Advertise a larger UDP buffer so moderate answer sets arrive without
-	// truncation.
-	msg.SetEdns0(udpBufferSize, false)
-
 	start := time.Now()
-	resp, _, err := p.udpClient.ExchangeContext(ctx, msg, p.server)
-	// On truncation (TC bit), retry over TCP so the answer set is complete —
-	// otherwise answer_count is undercounted and expected-matching may miss a
-	// record that was dropped from the truncated UDP response.
-	truncated := false
-	if err == nil && resp != nil && resp.Truncated {
-		truncated = true
-		resp, _, err = p.tcpClient.ExchangeContext(ctx, msg, p.server)
+	results := make([]ResolverResult, len(p.servers))
+	var wg sync.WaitGroup
+	for i, server := range p.servers {
+		wg.Go(func() { results[i] = p.exchange(ctx, server) })
 	}
+	wg.Wait()
 	end := time.Now()
 
 	res := probe.Result{
 		Duration:  end.Sub(start),
 		Timestamp: end,
 	}
-	res.Timings.DNS = res.Duration // the whole probe is the DNS query
+	// The whole probe is the DNS query; with several resolvers running in
+	// parallel that is the slowest of them.
+	res.Timings.DNS = res.Duration
 
-	if err != nil {
-		res.FailureReason = classifyError(err)
+	primary := results[0]
+	if primary.err != nil && len(results) == 1 {
+		// The only resolver produced no response at all, so there is nothing to
+		// describe. With several resolvers the others still are.
+		res.FailureReason = primary.Reason
 		if res.FailureReason.IsTimeout() {
 			// The whole probe is the query, so a timeout can only be here.
 			res.TimeoutPhase = probe.PhaseDNS
@@ -145,29 +161,146 @@ func (p *Prober) Probe(ctx context.Context) probe.Result {
 	}
 
 	diag := &Diagnostics{
-		ResponseCode:     resp.Rcode,
-		ResponseCodeText: dnslib.RcodeToString[resp.Rcode],
-		Answers:          extractAnswers(resp, p.qtype),
-		Truncated:        truncated && resp.Truncated, // true only if TCP was also truncated
+		ResponseCode:     primary.ResponseCode,
+		ResponseCodeText: primary.ResponseCodeText,
+		Answers:          primary.Answers,
+		AnswerCount:      len(primary.Answers),
+		Truncated:        primary.Truncated,
+		Consistent:       true,
 	}
-	diag.AnswerCount = len(diag.Answers)
+	if len(results) > 1 {
+		diag.Resolvers = results
+		diag.Consistent = sameAnswers(results, p.qtype)
+	}
 	res.Diagnostics = diag
-
-	if resp.Rcode != dnslib.RcodeSuccess {
-		res.FailureReason = probe.ReasonDNSError
-		return res
+	res.FailureReason = p.verdict(results, diag.Consistent)
+	if res.FailureReason.IsTimeout() {
+		res.TimeoutPhase = probe.PhaseDNS
 	}
+	res.Success = res.FailureReason == probe.ReasonNone
+	return res
+}
 
+// verdict classifies the per-resolver results; see Probe for the order.
+func (p *Prober) verdict(results []ResolverResult, consistent bool) probe.FailureReason {
+	for _, r := range results {
+		if r.Reason != probe.ReasonNone {
+			return r.Reason
+		}
+	}
 	// Without an expected set, a NOERROR response is a success even with zero
 	// answers; the answer_count metric surfaces "did not resolve" for alerting.
-	// With an expected set, at least one answer must match.
-	if len(p.expected) > 0 && !matchExpected(diag.Answers, p.expected, p.qtype) {
-		res.FailureReason = probe.ReasonValidationFailed
-		return res
+	// With an expected set, at least one answer of every resolver must match.
+	if len(p.expected) > 0 {
+		for _, r := range results {
+			if !matchExpected(r.Answers, p.expected, p.qtype) {
+				return probe.ReasonValidationFailed
+			}
+		}
+	}
+	if !consistent {
+		return probe.ReasonDNSMismatch
+	}
+	return probe.ReasonNone
+}
+
+// exchange queries one resolver, falling back to TCP on a truncated UDP
+// response.
+//
+// Parameters:
+//   - ctx: carries the probe deadline.
+//   - server: the resolver as "host:port".
+//
+// It returns the resolver's result; Reason is ReasonNone only for a NOERROR
+// response.
+func (p *Prober) exchange(ctx context.Context, server string) ResolverResult {
+	msg := new(dnslib.Msg)
+	msg.SetQuestion(p.query, p.qtype)
+	// Advertise a larger UDP buffer so moderate answer sets arrive without
+	// truncation.
+	msg.SetEdns0(udpBufferSize, false)
+
+	out := ResolverResult{Server: server}
+	start := time.Now()
+	resp, _, err := p.udpClient.ExchangeContext(ctx, msg, server)
+	// On truncation (TC bit), retry over TCP so the answer set is complete —
+	// otherwise answer_count is undercounted and expected-matching may miss a
+	// record that was dropped from the truncated UDP response.
+	truncated := false
+	if err == nil && resp != nil && resp.Truncated {
+		truncated = true
+		resp, _, err = p.tcpClient.ExchangeContext(ctx, msg, server)
+	}
+	out.Duration = time.Since(start)
+
+	if err != nil {
+		out.err = err
+		out.Reason = classifyError(err)
+		return out
 	}
 
-	res.Success = true
-	return res
+	out.ResponseCode = resp.Rcode
+	out.ResponseCodeText = dnslib.RcodeToString[resp.Rcode]
+	out.Answers = extractAnswers(resp, p.qtype)
+	out.Truncated = truncated && resp.Truncated // true only if TCP was also truncated
+	if resp.Rcode != dnslib.RcodeSuccess {
+		out.Reason = probe.ReasonDNSError
+	}
+	return out
+}
+
+// sameAnswers reports whether every resolver returned the same answer set. Sets
+// are compared in canonical form, so order, duplicates, the case of host names
+// and the spelling of IPv6 addresses do not count as a difference. A resolver
+// without a response has no set to compare and is skipped: its failure is
+// reported on its own.
+func sameAnswers(results []ResolverResult, qtype uint16) bool {
+	var want []string
+	seen := false
+	for _, r := range results {
+		if r.err != nil {
+			continue
+		}
+		set := canonicalSet(r.Answers, qtype)
+		if !seen {
+			want, seen = set, true
+			continue
+		}
+		if !slices.Equal(set, want) {
+			return false
+		}
+	}
+	return true
+}
+
+// canonicalSet returns the sorted, de-duplicated canonical form of answers.
+func canonicalSet(answers []string, qtype uint16) []string {
+	out := make([]string, 0, len(answers))
+	for _, a := range answers {
+		out = append(out, canonical(a, qtype))
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+// canonical normalises one answer the same way valueEqual compares it.
+func canonical(answer string, qtype uint16) string {
+	switch qtype {
+	case dnslib.TypeA, dnslib.TypeAAAA:
+		if ip := net.ParseIP(answer); ip != nil {
+			return ip.String()
+		}
+		return answer
+	case dnslib.TypeMX, dnslib.TypeCNAME:
+		return strings.ToLower(strings.TrimSuffix(answer, "."))
+	case dnslib.TypeSRV:
+		if v, ok := parseSRV(answer); ok {
+			return fmt.Sprintf("%d %d %d %s", v.priority, v.weight, v.port, strings.ToLower(strings.TrimSuffix(v.target, ".")))
+		}
+		return answer
+	default: // TXT: case-sensitive.
+		return answer
+	}
 }
 
 // classifyError maps a query error to a stable FailureReason.
