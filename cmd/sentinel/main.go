@@ -267,6 +267,7 @@ func tlsProbeOptions(target config.Target, caPools map[string]*x509.CertPool, cl
 		ServerName: strings.TrimSpace(t.ServerName),
 		ALPN:       t.ALPN,
 		StartTLS:   tlsprobe.StartTLS(t.StartTLS),
+		Enumerate:  enumerateOptions(t.Enumerate),
 	}
 
 	settings, err := tlsSettings(&t.TLSConfig, caPools, clientCerts)
@@ -279,6 +280,24 @@ func tlsProbeOptions(target config.Target, caPools map[string]*x509.CertPool, cl
 	opts.MaxVersion = settings.maxVersion
 	opts.Policy = settings.policy
 	return opts, nil
+}
+
+// enumerateOptions maps a validated tls.enumerate block to prober options; nil
+// stays nil (no enumeration).
+func enumerateOptions(e *config.TLSEnumerate) *tlsprobe.EnumerateOptions {
+	if e == nil {
+		return nil
+	}
+	opts := &tlsprobe.EnumerateOptions{ForbidInsecureCiphers: e.ForbidInsecureCiphers}
+	if e.Interval != nil {
+		opts.Interval = e.Interval.Duration()
+	}
+	for _, v := range e.ForbidVersions {
+		if code, ok := tlsprobe.ParseEnumVersion(strings.TrimSpace(v)); ok {
+			opts.ForbidVersions = append(opts.ForbidVersions, code)
+		}
+	}
+	return opts
 }
 
 // resolvedTLS holds the loaded, ready-to-use form of a TLSConfig block.

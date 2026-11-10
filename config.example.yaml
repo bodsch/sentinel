@@ -295,6 +295,22 @@ targets:
       expect:
         min_days_remaining: 21
 
+  # TLS policy check: enumerate the versions and cipher suites the server
+  # accepts (about 30 extra handshakes, at most once per interval, never part
+  # of the timings) and fail with tls_policy_violation on a forbidden hit.
+  - name: www-tls-policy
+    interval: 5m
+    tags:
+      service: web
+      environment: production
+    tls:
+      host: www.example.org
+      port: 443
+      enumerate:
+        interval: 1h
+        forbid_versions: ["1.0", "1.1"]
+        forbid_insecure_ciphers: true
+
   # TLS check against an IP address behind an SNI-routing load balancer, with
   # ALPN. Without server_name the server would answer with its default
   # certificate: Go sends no SNI for an IP literal.

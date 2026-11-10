@@ -329,9 +329,38 @@ type TLSProbeConfig struct {
 	// handshake: "smtp", "imap", "pop3" or "ldap". Empty (the default) expects
 	// TLS immediately on connect. Normalised to lowercase on load.
 	StartTLS string `yaml:"starttls"`
+	// Enumerate enables a periodic enumeration of the protocol versions and
+	// cipher suites the server accepts. Nil disables it.
+	Enumerate *TLSEnumerate `yaml:"enumerate"`
 
 	TLSConfig `yaml:",inline"`
 }
+
+// TLSEnumerate configures the version and cipher-suite enumeration of a tls
+// target.
+type TLSEnumerate struct {
+	// Interval is the minimum time between two enumerations (default 1h, at
+	// least 1m). One enumeration costs about thirty handshakes.
+	Interval *Duration `yaml:"interval"`
+	// ForbidVersions are versions the server must not accept: "1.0", "1.1",
+	// "1.2" or "1.3". A hit fails the target with tls_policy_violation.
+	ForbidVersions []string `yaml:"forbid_versions"`
+	// ForbidInsecureCiphers fails the target with tls_policy_violation when
+	// the server accepts a suite crypto/tls classifies as insecure.
+	ForbidInsecureCiphers bool `yaml:"forbid_insecure_ciphers"`
+}
+
+// AllowedEnumerateVersions is the set of versions accepted in
+// tls.enumerate.forbid_versions.
+var AllowedEnumerateVersions = map[string]struct{}{
+	"1.0": {},
+	"1.1": {},
+	"1.2": {},
+	"1.3": {},
+}
+
+// minEnumerateInterval bounds tls.enumerate.interval from below.
+const minEnumerateInterval = time.Minute
 
 // ResolvedServers returns the resolvers to query: Servers when set, otherwise
 // the single Server. Entries are trimmed.

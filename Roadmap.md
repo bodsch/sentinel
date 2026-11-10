@@ -138,10 +138,7 @@ Implemented:
 - ALPN negotiation (`tls.alpn`) reported as `sentinel_tls_alpn_info`
 - mutual TLS, SNI override and version cap shared with `http.tls`
 - STARTTLS (`tls.starttls`: smtp, imap, pop3, ldap)
-
-Planned:
-
-- supported-version / supported-cipher enumeration
+- supported-version / supported-cipher enumeration (`tls.enumerate`)
 
 ---
 
@@ -304,9 +301,14 @@ Planned:
 
 Planned:
 
-- supported-version and supported-cipher enumeration in the `tls:` probe (needs
-  several deliberately downgraded handshakes; `max_version` covers the common
-  case today)
+- ~~supported-version and supported-cipher enumeration~~ **(implemented)**:
+  `tls.enumerate` tries TLS 1.0–1.3 and each of the 27 TLS 1.0–1.2 suites
+  crypto/tls can offer in separate handshakes, after the measurement and at
+  most once per interval (default 1h); `forbid_versions` and
+  `forbid_insecure_ciphers` turn a hit into `tls_policy_violation`. A timeout
+  is "unknown", never "refused". Not covered, because crypto/tls cannot speak
+  them: SSLv3, export, NULL, anonymous and DHE suites — a hand-built
+  ClientHello was considered and declined as security-sensitive custom code.
 - ~~STARTTLS~~ **(implemented)**: `tls.starttls` upgrades SMTP, IMAP, POP3
   and LDAP connections before the handshake, with its own failure reason
   `starttls_failed`, phase `starttls` and

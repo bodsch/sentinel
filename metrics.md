@@ -496,12 +496,10 @@ sentinel_tls_alpn_info{protocol="h2"}                          # always 1
 ```
 
 The first two describe what was **negotiated**, not what the server additionally
-supports: Sentinel offers only TLS 1.2+ and Go's secure cipher suites, so a weak
-suite can never be agreed. Enumerating a server's *supported* suites needs
-several deliberately downgraded handshakes, which a probe that also measures
-latency must not do. For versions there is a practical substitute: pin a second
-target to `tls.max_version: "1.2"` and its success answers "does a TLS 1.2 client
-still get through?".
+supports: the regular probe offers only TLS 1.2+ and Go's secure cipher suites,
+so a weak suite can never be agreed. What the server *additionally* accepts is
+measured by the opt-in enumeration of a `tls` target (`tls.enumerate`, see
+*Enumeration* below), in separate handshakes outside the measurement.
 
 `sentinel_tls_alpn_info` appears only when an application protocol was actually
 agreed — that is, for a `tls` target configured with `alpn`. The HTTP probe's
@@ -529,6 +527,26 @@ what allows DNS and connect to be separated at all — the two call for entirely
 different investigations. The trade-off is that addresses are tried in sequence
 rather than raced (no Happy Eyeballs), which keeps each measurement attributable
 to a single address.
+
+### Enumeration (`tls.enumerate` only)
+
+```
+sentinel_tls_version_supported{version="TLS 1.0"}                          # 1 accepted, 0 refused
+sentinel_tls_cipher_supported{cipher="TLS_RSA_WITH_3DES_EDE_CBC_SHA",insecure="true"}  # accepted suites only
+sentinel_tls_insecure_ciphers_supported                                    # count of accepted insecure suites
+sentinel_tls_enumeration_complete                                          # 0 = some handshakes gave no answer
+sentinel_tls_enumeration_timestamp_seconds                                 # when the last enumeration finished
+```
+
+An enumeration runs at its own interval (default one hour), so these series
+can be older than the probe; the timestamp says how old. A version or suite
+whose handshake timed out is left out rather than reported as refused.
+
+```
+sentinel_tls_version_supported{version=~"TLS 1\\.[01]"} == 1   # legacy protocol still on
+sentinel_tls_insecure_ciphers_supported > 0
+time() - sentinel_tls_enumeration_timestamp_seconds > 3 * 3600   # enumeration stuck
+```
 
 With `tls.starttls` the connect phase is followed by the plaintext upgrade
 dialogue (greeting, capability check, the STARTTLS command), reported as

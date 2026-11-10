@@ -558,6 +558,21 @@ func TestValidationErrors(t *testing.T) {
 			wantSub: "tls.alpn[0] must not be empty",
 		},
 		{
+			name:    "tls enumerate interval too short",
+			yaml:    "targets:\n  - name: x\n    tls:\n      host: a.example\n      port: 443\n      enumerate:\n        interval: 30s\n",
+			wantSub: "tls.enumerate.interval 30s must be at least 1m0s",
+		},
+		{
+			name:    "tls enumerate unknown version",
+			yaml:    "targets:\n  - name: x\n    tls:\n      host: a.example\n      port: 443\n      enumerate:\n        forbid_versions: [\"SSLv3\"]\n",
+			wantSub: "tls.enumerate.forbid_versions[0] \"SSLv3\" is not supported (allowed: 1.0, 1.1, 1.2, 1.3)",
+		},
+		{
+			name:    "enumerate is not an http.tls setting",
+			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n      tls:\n        enumerate: {}\n",
+			wantSub: "enumerate",
+		},
+		{
 			name:    "tls probe unsupported starttls",
 			yaml:    "targets:\n  - name: x\n    tls:\n      host: a.example\n      port: 5222\n      starttls: xmpp\n",
 			wantSub: "tls.starttls \"xmpp\" is not supported (allowed: imap, ldap, pop3, smtp)",
