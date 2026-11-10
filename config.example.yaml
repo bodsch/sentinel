@@ -226,8 +226,7 @@ targets:
   # Standalone TLS check: any endpoint that speaks TLS immediately on connect
   # (LDAPS 636, SMTPS 465, IMAPS 993, MQTT 8883, or a bare TLS port). It emits
   # the same certificate/chain/OCSP metrics as an HTTPS target, plus its own
-  # DNS/connect/handshake phase timings. STARTTLS ports (587, 143, 389) are not
-  # supported — use the implicit-TLS port where one exists.
+  # DNS/connect/handshake phase timings. For STARTTLS ports see the next target.
   - name: ldaps
     interval: 1m
     tags:
@@ -236,6 +235,22 @@ targets:
     tls:
       host: ldap.example.org
       port: 636
+      expect:
+        min_days_remaining: 21
+
+  # STARTTLS: upgrade a plaintext connection before the handshake. Supported:
+  # smtp (587/25), imap (143), pop3 (110), ldap (389). The dialogue time is
+  # reported as sentinel_tls_starttls_duration_seconds; a server that does not
+  # agree to upgrade fails with starttls_failed.
+  - name: mail-submission
+    interval: 1m
+    tags:
+      service: mail
+      environment: production
+    tls:
+      host: mail.example.org
+      port: 587
+      starttls: smtp
       expect:
         min_days_remaining: 21
 

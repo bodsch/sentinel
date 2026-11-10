@@ -80,6 +80,9 @@ func (c *Config) applyDefaults() {
 		if t.DNS != nil {
 			applyDNSDefaults(t.DNS)
 		}
+		if t.TLS != nil {
+			t.TLS.StartTLS = strings.ToLower(strings.TrimSpace(t.TLS.StartTLS))
+		}
 	}
 }
 

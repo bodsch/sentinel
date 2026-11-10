@@ -558,6 +558,16 @@ func TestValidationErrors(t *testing.T) {
 			wantSub: "tls.alpn[0] must not be empty",
 		},
 		{
+			name:    "tls probe unsupported starttls",
+			yaml:    "targets:\n  - name: x\n    tls:\n      host: a.example\n      port: 5222\n      starttls: xmpp\n",
+			wantSub: "tls.starttls \"xmpp\" is not supported (allowed: imap, ldap, pop3, smtp)",
+		},
+		{
+			name:    "starttls is not an http.tls setting",
+			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n      tls:\n        starttls: smtp\n",
+			wantSub: "starttls",
+		},
+		{
 			name:    "tls probe alongside http",
 			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n    tls:\n      host: a.example\n      port: 443\n",
 			wantSub: "multiple protocol blocks",
@@ -781,6 +791,22 @@ targets:
 	}
 	if tc.Expect == nil || tc.Expect.MinDaysRemaining != 21 {
 		t.Errorf("expect = %+v, want min_days_remaining 21", tc.Expect)
+	}
+}
+
+// TestTLSProbeStartTLSNormalised checks the protocol name is case-insensitive
+// and that every documented value is accepted.
+func TestTLSProbeStartTLSNormalised(t *testing.T) {
+	t.Parallel()
+
+	for _, proto := range []string{"SMTP", "imap", " Pop3 ", "ldap"} {
+		cfg, err := parseResolve(t, "targets:\n  - name: x\n    tls:\n      host: a.example\n      port: 25\n      starttls: \""+proto+"\"\n")
+		if err != nil {
+			t.Fatalf("starttls %q rejected: %v", proto, err)
+		}
+		if got, want := cfg.Targets[0].TLS.StartTLS, strings.ToLower(strings.TrimSpace(proto)); got != want {
+			t.Errorf("starttls %q resolved to %q, want %q", proto, got, want)
+		}
 	}
 }
 

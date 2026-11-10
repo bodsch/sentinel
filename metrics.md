@@ -216,6 +216,8 @@ certificate_expiring
 
 tls_policy_violation
 
+starttls_failed
+
 redirect_loop
 
 redirect_limit_exceeded
@@ -508,6 +510,7 @@ empty label.
 sentinel_tls_dns_duration_seconds        # name resolution
 sentinel_tls_connect_duration_seconds    # TCP connection establishment
 sentinel_tls_handshake_duration_seconds  # TLS handshake
+sentinel_tls_starttls_duration_seconds   # plaintext STARTTLS dialogue (only with tls.starttls)
 ```
 
 Only the standalone `tls` probe emits these; an HTTPS target reports the same
@@ -520,6 +523,14 @@ what allows DNS and connect to be separated at all — the two call for entirely
 different investigations. The trade-off is that addresses are tried in sequence
 rather than raced (no Happy Eyeballs), which keeps each measurement attributable
 to a single address.
+
+With `tls.starttls` the connect phase is followed by the plaintext upgrade
+dialogue (greeting, capability check, the STARTTLS command), reported as
+`sentinel_tls_starttls_duration_seconds`. It is measured separately from the
+handshake because it mostly measures the server's application layer — a slow
+greeting from an overloaded mail server — rather than its TLS stack. A server
+that answers but does not agree to upgrade fails with `starttls_failed`; a
+timeout in that dialogue logs `phase="starttls"`.
 
 ---
 

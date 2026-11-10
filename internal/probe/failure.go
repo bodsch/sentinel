@@ -42,6 +42,12 @@ const (
 	// http.block_private_redirects. The redirect was not followed.
 	ReasonRedirectBlocked FailureReason = "redirect_blocked"
 
+	// ReasonStartTLSFailed means the server answered the STARTTLS dialogue but
+	// did not agree to upgrade: a refusing greeting, STARTTLS not offered, a
+	// negative reply, or a malformed or oversized response. A network failure
+	// during the dialogue keeps its usual reason.
+	ReasonStartTLSFailed FailureReason = "starttls_failed"
+
 	// ReasonNetworkError is the catch-all for network-level failures that do
 	// not fit a more specific reason above. It exists so the probe never has to
 	// silently misclassify an unusual error.
@@ -58,6 +64,7 @@ var allReasons = map[FailureReason]struct{}{
 	ReasonCertificateInvalid:  {},
 	ReasonCertificateExpiring: {},
 	ReasonTLSPolicyViolation:  {},
+	ReasonStartTLSFailed:      {},
 	ReasonRedirectLoop:        {},
 	ReasonRedirectLimit:       {},
 	ReasonDowngrade:           {},

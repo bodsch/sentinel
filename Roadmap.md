@@ -115,8 +115,8 @@ Planned:
   server-first banner
 - optional TLS on a TCP target. Today an endpoint that speaks TLS on connect is
   covered by the `tls:` block instead, which is the clearer split: `tcp:` answers
-  "does it accept connections", `tls:` answers "is the certificate sound". The
-  combination only becomes interesting together with STARTTLS.
+  "does it accept connections", `tls:` answers "is the certificate sound";
+  STARTTLS ports are covered by `tls.starttls`.
 
 ---
 
@@ -130,10 +130,10 @@ Implemented:
   with the HTTPS path
 - ALPN negotiation (`tls.alpn`) reported as `sentinel_tls_alpn_info`
 - mutual TLS, SNI override and version cap shared with `http.tls`
+- STARTTLS (`tls.starttls`: smtp, imap, pop3, ldap)
 
 Planned:
 
-- STARTTLS, with the mail protocols in 0.3
 - supported-version / supported-cipher enumeration
 
 ---
@@ -300,8 +300,14 @@ Planned:
 - supported-version and supported-cipher enumeration in the `tls:` probe (needs
   several deliberately downgraded handshakes; `max_version` covers the common
   case today)
-- STARTTLS (SMTP 587, IMAP 143, LDAP 389), together with the mail protocols in
-  0.3 — the upgrade dialogue is protocol-specific and belongs with them
+- ~~STARTTLS~~ **(implemented)**: `tls.starttls` upgrades SMTP, IMAP, POP3
+  and LDAP connections before the handshake, with its own failure reason
+  `starttls_failed`, phase `starttls` and
+  `sentinel_tls_starttls_duration_seconds`. It was pulled forward from the mail
+  protocols because the certificate behind port 587/143/389 is the question
+  most often asked; checking the protocols themselves (authentication, mailbox
+  access) stays with them in 0.3. Plaintext bytes received after the server's
+  agreement are rejected rather than handed to the TLS layer.
 - active OCSP / CRL revocation checking as a per-target opt-in
 
 ---

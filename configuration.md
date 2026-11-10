@@ -719,9 +719,10 @@ Planned metrics: packet loss, latency, jitter.
 
 ## TLS Configuration
 
-A `tls:` target checks any endpoint that speaks TLS **immediately on connect** —
-LDAPS (636), SMTPS (465), IMAPS (993), POP3S (995), MQTT over TLS (8883), or any
-bare TLS port. Such endpoints carry no HTTP to probe them with, while a `tcp:`
+A `tls:` target checks any endpoint that speaks TLS — **immediately on connect**
+(LDAPS 636, SMTPS 465, IMAPS 993, POP3S 995, MQTT over TLS 8883, or any bare TLS
+port) or **after a STARTTLS upgrade** (SMTP 587/25, IMAP 143, POP3 110, LDAP
+389, see below). Such endpoints carry no HTTP to probe them with, while a `tcp:`
 target only sees that a connection opens and never the certificate behind it.
 
 ```
@@ -735,13 +736,15 @@ targets:
 ```
 
 The probe resolves the name, connects, completes the handshake, inspects the
-certificate, and closes. No application protocol is spoken afterwards.
+certificate, and closes. No application protocol is spoken afterwards, apart
+from the polite goodbye of a STARTTLS session.
 
 | Key | Meaning |
 |---|---|
 | `host` | hostname or IP address (required) |
 | `port` | TCP port, 1-65535 (required) |
 | `alpn` | application protocols to offer, most preferred first |
+| `starttls` | upgrade a plaintext connection first: `smtp`, `imap`, `pop3` or `ldap` (case-insensitive). Unset: TLS on connect |
 | everything from *TLS verification* / *TLS expectations* | `ca_file`, `insecure_skip_verify`, `cert_file`/`key_file`, `server_name`, `max_version`, `expect` — written exactly as under `http.tls` |
 
 **Metrics.** A `tls:` target emits the complete `sentinel_tls_certificate_*`,
@@ -772,12 +775,44 @@ Happy Eyeballs (no parallel IPv4/IPv6 race): addresses are tried in sequence,
 which keeps each measurement attributable to one address and still survives a
 broken IPv6 path.
 
-### Not covered: STARTTLS
+### STARTTLS
 
-Ports that begin in plaintext and upgrade on command (SMTP 587, IMAP 143,
-LDAP 389) are **not** supported. The upgrade needs a protocol-specific dialogue,
-which belongs with the mail and directory protocols on the roadmap rather than in
-a generic TLS check. Use the implicit-TLS port where one exists (465, 993, 636).
+Ports that begin in plaintext and upgrade on command are covered by
+`starttls`. The probe speaks just enough of the protocol to get there, then
+runs the normal handshake and certificate inspection:
+
+| `starttls` | Dialogue | Typical port |
+|---|---|---|
+| `smtp` | greeting `220` → `EHLO localhost` → `STARTTLS` must be offered → `STARTTLS` → `220` | 587, 25 |
+| `imap` | greeting `* OK` → `a001 STARTTLS` → `a001 OK` | 143 |
+| `pop3` | greeting `+OK` → `STLS` → `+OK` | 110 |
+| `ldap` | StartTLS extended operation (OID `1.3.6.1.4.1.1466.20037`) → resultCode `success` | 389 |
+
+```
+targets:
+  - name: submission
+    tls:
+      host: mail.example.org
+      port: 587
+      starttls: smtp
+      expect:
+        min_days_remaining: 21
+```
+
+- **`starttls_failed`** — the server answered but did not agree to upgrade: a
+  refusing greeting (`554`, `* PREAUTH`, `-ERR`), STARTTLS missing from the
+  SMTP `EHLO` reply, a negative answer, or a malformed or oversized reply. A
+  network failure during the dialogue keeps its usual reason, and a timeout
+  there logs `phase="starttls"`.
+- **`sentinel_tls_starttls_duration_seconds`** — the plaintext dialogue,
+  reported separately from the handshake. A slow greeting usually means a busy
+  mail server, not a slow TLS stack.
+- **Plaintext injection.** Bytes the server sends after agreeing but before the
+  handshake are rejected (`starttls_failed`) instead of being handed to the TLS
+  layer, so data injected on the plaintext leg cannot pass as protected.
+- **No authentication.** The probe never logs in; it checks that the upgrade
+  works and inspects the certificate. After the handshake it sends `QUIT`,
+  `LOGOUT` or an LDAP unbind, so the server logs an orderly end of session.
 
 ### Not covered: cipher and version enumeration
 

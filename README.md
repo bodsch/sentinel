@@ -31,7 +31,8 @@ already ships:
   negotiated version and cipher, certificate identity and key strength, OCSP stapling, plus opt-in
   per-target expectations (`http.tls.expect`)
 - a **DNS** probe (A/AAAA/MX/TXT/CNAME/SRV), a **TCP** probe (connection check + optional banner validation)
-  and a **TLS** probe for any endpoint speaking TLS on connect (LDAPS, SMTPS, IMAPS, MQTT, …)
+  and a **TLS** probe for any endpoint speaking TLS on connect (LDAPS, SMTPS, IMAPS, MQTT, …) or
+  after a **STARTTLS** upgrade (SMTP, IMAP, POP3, LDAP)
 - response validators: status, body regex, header match, and **JSONPath** (`expect.json`)
 - latency **histograms** fed at probe time, plus per-phase gauges and `go_*`/`process_*` runtime metrics
 
@@ -236,6 +237,7 @@ chapter also maps every blackbox_exporter TLS series to its Sentinel counterpart
 - HTTP / HTTPS
 - DNS (A, AAAA, MX, TXT, CNAME, SRV)
 - TCP (connection check + optional `banner_regex` validation)
+- TLS (TLS on connect, or STARTTLS for SMTP, IMAP, POP3, LDAP)
 
 ### Planned
 
@@ -360,8 +362,7 @@ failure reason, which already says where the run failed.
 
 ## Future (maybe) Improvements
 
-Planned next: more protocols (ICMP, mail with STARTTLS, LDAP, SSH, NTP, MQTT,
-gRPC), DNS and TLS depth (DNSSEC, resolver comparison, version/cipher
+Planned next: more protocols (ICMP, mail, LDAP, SSH, NTP, MQTT, gRPC), DNS and TLS depth (DNSSEC, resolver comparison, version/cipher
 enumeration, active revocation checks) and HTTP depth (HTTP/2, XPath, body-size
 and compression checks).
 

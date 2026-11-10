@@ -27,6 +27,9 @@ const (
 	PhaseDownload Phase = "download"
 	// PhaseBanner is waiting for a TCP server's greeting banner.
 	PhaseBanner Phase = "banner"
+	// PhaseStartTLS is the plaintext dialogue that upgrades a connection to TLS
+	// (greeting, capability check, the STARTTLS command).
+	PhaseStartTLS Phase = "starttls"
 )
 
 // String returns the phase as a plain string for use in logs.
