@@ -29,6 +29,10 @@ type Diagnostics struct {
 	// StartTLSDuration is how long that dialogue took, from the first byte read
 	// to the server's agreement. Zero without STARTTLS.
 	StartTLSDuration time.Duration
+	// Enumeration is the latest version and cipher-suite enumeration; nil when
+	// the target does not enumerate or none has completed yet. It may be older
+	// than this result: enumerations run at their own interval.
+	Enumeration *Enumeration
 	// TLS holds the certificate diagnostics. It is nil only when the handshake
 	// never completed.
 	TLS *tlsdiag.Info

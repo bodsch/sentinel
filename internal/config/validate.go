@@ -503,6 +503,17 @@ func validateTLSProbe(label string, t *TLSProbeConfig) []error {
 		}
 	}
 
+	if e := t.Enumerate; e != nil {
+		if e.Interval != nil && e.Interval.Duration() < minEnumerateInterval {
+			errs = append(errs, fmt.Errorf("config: %s: tls.enumerate.interval %s must be at least %s", label, e.Interval.Duration(), minEnumerateInterval))
+		}
+		for i, v := range e.ForbidVersions {
+			if _, ok := AllowedEnumerateVersions[strings.TrimSpace(v)]; !ok {
+				errs = append(errs, fmt.Errorf("config: %s: tls.enumerate.forbid_versions[%d] %q is not supported (allowed: %s)", label, i, v, sortedKeys(AllowedEnumerateVersions)))
+			}
+		}
+	}
+
 	errs = append(errs, validateTLSSettings(label, "tls", &t.TLSConfig)...)
 	return errs
 }

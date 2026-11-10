@@ -867,6 +867,7 @@ from the polite goodbye of a STARTTLS session.
 | `port` | TCP port, 1-65535 (required) |
 | `alpn` | application protocols to offer, most preferred first |
 | `starttls` | upgrade a plaintext connection first: `smtp`, `imap`, `pop3` or `ldap` (case-insensitive). Unset: TLS on connect |
+| `enumerate` | periodic version and cipher-suite enumeration, see below |
 | everything from *TLS verification* / *TLS expectations* | `ca_file`, `insecure_skip_verify`, `cert_file`/`key_file`, `server_name`, `max_version`, `expect` — written exactly as under `http.tls` |
 
 **Metrics.** A `tls:` target emits the complete `sentinel_tls_certificate_*`,
@@ -936,13 +937,55 @@ targets:
   works and inspects the certificate. After the handshake it sends `QUIT`,
   `LOGOUT` or an LDAP unbind, so the server logs an orderly end of session.
 
-### Not covered: cipher and version enumeration
+### Version and cipher-suite enumeration
 
 What a server *additionally* supports cannot be learned from one handshake.
-`max_version` gives a usable substitute for the common question: pin a second
-target to `"1.2"` and its success tells you whether a TLS 1.2 client still gets
-through. A full matrix would need several deliberately downgraded handshakes,
-which a probe that also measures latency must not do.
+`enumerate` runs the extra handshakes — one per version, one per cipher suite —
+at its own, slow interval:
+
+```
+targets:
+  - name: www-tls-policy
+    tls:
+      host: www.example.org
+      port: 443
+      enumerate:
+        interval: 1h                       # default 1h, at least 1m
+        forbid_versions: ["1.0", "1.1"]    # optional
+        forbid_insecure_ciphers: true      # optional
+```
+
+- **What is tried.** TLS 1.0, 1.1, 1.2 and 1.3, each alone; then every
+  TLS 1.0–1.2 suite crypto/tls can offer (27, including RC4, 3DES and RSA key
+  exchange), each alone, at the highest version up to 1.2 the server accepted.
+  Not covered, because crypto/tls cannot speak them: SSLv3, export, NULL,
+  anonymous and DHE suites, and the TLS 1.3 suites individually.
+- **When.** After the regular probe, at most once per `interval`; the result
+  is cached and reused (and enforced) in between. It needs only a TCP
+  connection: a server that speaks nothing but TLS 1.0 fails the regular probe
+  (which offers TLS 1.2+), and the enumeration still shows what it accepts. One enumeration is about 30
+  handshakes on four connections at a time, to the address the regular probe
+  reached, with STARTTLS and the client certificate if configured. A mail
+  server logs those as aborted sessions — keep the interval long.
+- **Clean measurement.** The extra handshakes run after the regular probe's
+  timings and duration are taken; they never show up in them.
+- **Answers.** A refusal (alert, closed connection, a different version or
+  suite chosen) means *not supported*. A timeout or a failed connection means
+  *unknown*: the entry is left out of the metrics, the run is marked
+  incomplete, and it never counts as a policy hit.
+- **Policy.** `forbid_versions` and `forbid_insecure_ciphers` fail the target
+  with `tls_policy_violation` — unless the regular probe already failed, whose
+  reason wins (a server offering only insecure suites fails the regular
+  handshake; the enumeration series show why). "Insecure" is crypto/tls's classification: RC4,
+  3DES, RSA key exchange and CBC with SHA-256.
+
+Metrics: `sentinel_tls_version_supported{version}`,
+`sentinel_tls_cipher_supported{cipher,insecure}` (only accepted suites),
+`sentinel_tls_insecure_ciphers_supported`, `sentinel_tls_enumeration_complete`
+and `sentinel_tls_enumeration_timestamp_seconds` — see `metrics.md`.
+
+`max_version` remains the lighter alternative for the single question "does a
+TLS 1.2 client still get through?".
 
 ---
 

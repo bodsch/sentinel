@@ -72,6 +72,9 @@ type Options struct {
 	// StartTLS selects the plaintext dialogue run before the handshake.
 	// StartTLSNone (the default) expects TLS immediately on connect.
 	StartTLS StartTLS
+	// Enumerate enables the periodic version and cipher-suite enumeration;
+	// nil disables it.
+	Enumerate *EnumerateOptions
 }
 
 // Prober runs TLS checks for a single target. It satisfies probe.Prober.
@@ -89,6 +92,11 @@ type Prober struct {
 	policy     *tlsdiag.Policy
 	startTLS   StartTLS
 	resolver   resolver
+	enumerate  *EnumerateOptions
+	// lastEnum is the most recent enumeration, reused until it is due again.
+	// Like the handshake state below it needs no lock: a Prober runs one probe
+	// at a time.
+	lastEnum *Enumeration
 
 	// Per-run handshake state, written by verifyConnection during the
 	// (synchronous, same-goroutine) handshake and read once it returns. A Prober
@@ -149,6 +157,7 @@ func New(opts Options) (*Prober, error) {
 		policy:     opts.Policy,
 		startTLS:   opts.StartTLS,
 		resolver:   net.DefaultResolver,
+		enumerate:  opts.Enumerate,
 	}, nil
 }
 
@@ -159,12 +168,27 @@ func (p *Prober) Type() string { return ProbeType }
 // and completes the handshake, and returns a typed Result. It never returns an
 // error: a failed check is a successful execution with Success=false.
 func (p *Prober) Probe(ctx context.Context) probe.Result {
+	parent := ctx
 	ctx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
 
 	start := time.Now()
 	diag, timings, phase, reason := p.run(ctx)
 	end := time.Now()
+
+	// The enumeration runs after the measurement, so its extra handshakes
+	// never show up in the phase timings or the duration. It needs only a
+	// reachable endpoint: a server that speaks nothing but TLS 1.0 fails the
+	// regular handshake, and is exactly what the enumeration exists to show.
+	if p.enumerate != nil {
+		if diag.Endpoint != "" && p.enumerationDue(end) {
+			p.lastEnum = p.runEnumeration(parent, diag.Endpoint)
+		}
+		diag.Enumeration = p.lastEnum
+		if reason == probe.ReasonNone {
+			reason = p.enumerationReason()
+		}
+	}
 
 	res := probe.Result{
 		Success:       reason == probe.ReasonNone,

@@ -18,7 +18,8 @@ er langsam/nicht erreichbar?" — über phasengenaue Diagnostik (DNS/TCP/TLS/TTF
 - DNS-Probe (A/AAAA/MX/TXT/CNAME/SRV, optional mehrere Resolver im Vergleich, Zonen-Check der
   Nameserver auf Autorität und SOA-Serial, DNSSEC über das AD-Bit), TCP-Probe (Connect + optionale Banner-Validierung) und
   TLS-Probe für beliebige Endpunkte, die direkt TLS sprechen (LDAPS, SMTPS, IMAPS, MQTT …)
-  oder per STARTTLS upgraden (SMTP, IMAP, POP3, LDAP)
+  oder per STARTTLS upgraden (SMTP, IMAP, POP3, LDAP), optional mit Enumeration der akzeptierten
+  Versionen und Cipher-Suites
 - Response-Validierung (Status-Code, Body-Regex, Header, JSONPath)
 - Redirect-Handling inkl. Loop- und HTTPS→HTTP-Downgrade-Erkennung
 - TLS-Diagnostik über die gesamte Zertifikatskette (früheste Ablaufzeit, Kettenlänge/Trust,
