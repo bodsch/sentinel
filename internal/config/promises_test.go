@@ -133,8 +133,20 @@ func TestLoadRejectsUnreadableAndCorruptFiles(t *testing.T) {
 		{"a file the process cannot read", unreadable},
 	}
 
+	// Permission bits do not bind root (a CI container commonly runs as root),
+	// so the unreadable case only proves something when the file really is
+	// unreadable to this process.
+	unreadableIsReadable := false
+	if f, err := os.Open(unreadable); err == nil {
+		_ = f.Close()
+		unreadableIsReadable = true
+	}
+
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.path == unreadable && unreadableIsReadable {
+				t.Skip("mode 0o000 is readable to this process (running as root); cannot provoke a permission error")
+			}
 			cfg, err := Load(tc.path)
 			if err == nil {
 				t.Fatalf("Load(%s) returned nil error and %d targets; Sentinel would start "+
