@@ -146,9 +146,14 @@ func validateTCP(label string, tc *TCPConfig) []error {
 func validateDNS(label string, d *DNSConfig) []error {
 	var errs []error
 
-	if strings.TrimSpace(d.Server) == "" {
-		errs = append(errs, fmt.Errorf("config: %s: dns.server is required", label))
-	} else if !validDNSServer(d.Server) {
+	switch {
+	case strings.TrimSpace(d.Server) != "" && len(d.Servers) > 0:
+		errs = append(errs, fmt.Errorf("config: %s: dns.server and dns.servers are mutually exclusive", label))
+	case len(d.Servers) > 0:
+		errs = append(errs, validateDNSServers(label, d.Servers)...)
+	case strings.TrimSpace(d.Server) == "":
+		errs = append(errs, fmt.Errorf("config: %s: dns.server (or dns.servers) is required", label))
+	case !validDNSServer(d.Server):
 		errs = append(errs, fmt.Errorf("config: %s: dns.server %q is not a valid host or host:port", label, d.Server))
 	}
 
@@ -177,6 +182,39 @@ func validateDNS(label string, d *DNSConfig) []error {
 		}
 	}
 
+	return errs
+}
+
+// maxDNSServers bounds dns.servers. Every resolver is queried on every run, and
+// the per-resolver series multiply with it; ten is far beyond any comparison
+// worth making.
+const maxDNSServers = 10
+
+// validateDNSServers validates a dns.servers list: at most maxDNSServers
+// entries, each a valid host or host:port, and no resolver listed twice (with
+// the default port made explicit, so "1.1.1.1" and "1.1.1.1:53" are the same).
+func validateDNSServers(label string, servers []string) []error {
+	var errs []error
+	if len(servers) > maxDNSServers {
+		errs = append(errs, fmt.Errorf("config: %s: dns.servers has %d entries, at most %d are allowed", label, len(servers), maxDNSServers))
+	}
+	seen := make(map[string]int, len(servers))
+	for i, raw := range servers {
+		s := strings.TrimSpace(raw)
+		if !validDNSServer(s) {
+			errs = append(errs, fmt.Errorf("config: %s: dns.servers[%d] %q is not a valid host or host:port", label, i, raw))
+			continue
+		}
+		key := s
+		if _, _, err := net.SplitHostPort(s); err != nil {
+			key = net.JoinHostPort(s, "53")
+		}
+		if first, dup := seen[key]; dup {
+			errs = append(errs, fmt.Errorf("config: %s: dns.servers[%d] %q repeats dns.servers[%d]", label, i, raw, first))
+			continue
+		}
+		seen[key] = i
+	}
 	return errs
 }
 

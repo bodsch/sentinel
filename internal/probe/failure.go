@@ -42,6 +42,10 @@ const (
 	// http.block_private_redirects. The redirect was not followed.
 	ReasonRedirectBlocked FailureReason = "redirect_blocked"
 
+	// ReasonDNSMismatch means a DNS target with several resolvers got
+	// different answer sets from them, although each answered successfully.
+	ReasonDNSMismatch FailureReason = "dns_mismatch"
+
 	// ReasonStartTLSFailed means the server answered the STARTTLS dialogue but
 	// did not agree to upgrade: a refusing greeting, STARTTLS not offered, a
 	// negative reply, or a malformed or oversized response. A network failure
@@ -57,6 +61,7 @@ const (
 // allReasons is the set of valid, non-empty failure reasons, used by Valid.
 var allReasons = map[FailureReason]struct{}{
 	ReasonDNSError:            {},
+	ReasonDNSMismatch:         {},
 	ReasonTCPTimeout:          {},
 	ReasonConnectionRefused:   {},
 	ReasonTLSError:            {},

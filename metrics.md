@@ -202,6 +202,8 @@ Possible values:
 ```
 dns_error
 
+dns_mismatch
+
 tcp_timeout
 
 connection_refused
@@ -622,6 +624,9 @@ tries every resolved address in turn rather than committing to one family.
 sentinel_dns_query_duration_seconds
 ```
 
+With several resolvers (`dns.servers`) this is the time for all of them; each
+resolver's own time is `sentinel_dns_resolver_query_duration_seconds`.
+
 ---
 
 ### DNS Response Code
@@ -645,6 +650,34 @@ Examples:
 ```
 sentinel_dns_answer_count
 ```
+
+---
+
+### Resolver comparison (`dns.servers` only)
+
+```
+sentinel_dns_answers_consistent                          # 1 = all resolvers agree, 0 = dns_mismatch
+sentinel_dns_resolver_query_duration_seconds{resolver}   # per resolver
+sentinel_dns_resolver_response_code{resolver}            # RCODE, -1 = no response
+sentinel_dns_resolver_answer_count{resolver}
+```
+
+`resolver` is the configured server as `host:port`. These series exist only for
+targets with `servers`; a single-`server` target emits exactly the three series
+above. With `servers`, those three describe the first resolver, and
+`sentinel_dns_query_duration_seconds` is the time for all of them (they run in
+parallel, so it is the slowest).
+
+Which resolver returns fewer records than the others (a set with the same
+size but different content shows only in `sentinel_dns_answers_consistent`):
+
+```
+sentinel_dns_resolver_answer_count
+  != on (target) group_left
+max by (target) (sentinel_dns_resolver_answer_count)
+```
+
+A resolver that stopped answering shows as `sentinel_dns_resolver_response_code == -1`.
 
 ---
 
