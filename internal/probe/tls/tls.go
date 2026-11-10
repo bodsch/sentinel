@@ -1,16 +1,16 @@
 // Package tls implements the standalone TLS probe: it connects to any endpoint
-// that speaks TLS immediately on connect — LDAPS, SMTPS, IMAPS, MQTT over TLS,
-// or a bare TLS port — completes the handshake, and inspects the certificate.
+// that speaks TLS — immediately on connect (LDAPS, SMTPS, IMAPS, MQTT over TLS,
+// a bare TLS port) or after a STARTTLS upgrade (SMTP, IMAP, POP3, LDAP) —
+// completes the handshake, and inspects the certificate.
 //
 // It exists because such endpoints carry no HTTP to probe them with, while the
 // TCP probe sees only that a connection can be opened and never the certificate
-// behind it. No application protocol is spoken after the handshake: the probe
-// connects, inspects, and closes.
+// behind it. No application protocol is spoken after the handshake beyond a
+// polite goodbye: the probe connects, inspects, and closes.
 //
-// STARTTLS (ports 587, 143, 389 …) is deliberately out of scope. Upgrading a
-// plaintext connection needs a protocol-specific dialogue, which belongs with
-// the mail and directory protocols themselves rather than in a generic TLS
-// check.
+// STARTTLS speaks only as much of the plaintext protocol as the upgrade needs
+// (greeting, capability check, the STARTTLS command). Checking the protocol
+// itself — authentication, mailbox access — is not this probe's job.
 //
 // The certificate inspection, the failure classification and the exported
 // sentinel_tls_* series are all shared with the HTTPS path; this package
@@ -69,6 +69,9 @@ type Options struct {
 	// Policy holds the target's opt-in TLS expectations. Nil or empty enforces
 	// nothing.
 	Policy *tlsdiag.Policy
+	// StartTLS selects the plaintext dialogue run before the handshake.
+	// StartTLSNone (the default) expects TLS immediately on connect.
+	StartTLS StartTLS
 }
 
 // Prober runs TLS checks for a single target. It satisfies probe.Prober.
@@ -84,6 +87,7 @@ type Prober struct {
 	clientCert *tls.Certificate
 	maxVersion uint16
 	policy     *tlsdiag.Policy
+	startTLS   StartTLS
 	resolver   resolver
 
 	// Per-run handshake state, written by verifyConnection during the
@@ -125,6 +129,11 @@ func New(opts Options) (*Prober, error) {
 	if opts.Port < 1 || opts.Port > 65535 {
 		return nil, fmt.Errorf("tls probe %q: port %d is out of range 1-65535", opts.Name, opts.Port)
 	}
+	switch opts.StartTLS {
+	case StartTLSNone, StartTLSSMTP, StartTLSIMAP, StartTLSPOP3, StartTLSLDAP:
+	default:
+		return nil, fmt.Errorf("tls probe %q: unsupported starttls protocol %q", opts.Name, opts.StartTLS)
+	}
 
 	return &Prober{
 		name:       opts.Name,
@@ -138,6 +147,7 @@ func New(opts Options) (*Prober, error) {
 		clientCert: opts.ClientCert,
 		maxVersion: opts.MaxVersion,
 		policy:     opts.Policy,
+		startTLS:   opts.StartTLS,
 		resolver:   net.DefaultResolver,
 	}, nil
 }
@@ -175,7 +185,7 @@ func (p *Prober) Probe(ctx context.Context) probe.Result {
 // the caller on a timeout), and the failure reason (ReasonNone on success).
 func (p *Prober) run(ctx context.Context) (*Diagnostics, probe.Timings, probe.Phase, probe.FailureReason) {
 	var timings probe.Timings
-	diag := &Diagnostics{ServerName: p.sni()}
+	diag := &Diagnostics{ServerName: p.sni(), StartTLS: p.startTLS}
 
 	p.info = nil
 	p.reason = probe.ReasonNone
@@ -189,6 +199,18 @@ func (p *Prober) run(ctx context.Context) (*Diagnostics, probe.Timings, probe.Ph
 	}
 	defer func() { _ = conn.conn.Close() }()
 	diag.Endpoint = conn.endpoint
+
+	if p.startTLS != StartTLSNone {
+		upgradeStart := time.Now()
+		err := upgrade(ctx, conn.conn, p.startTLS)
+		diag.StartTLSDuration = time.Since(upgradeStart)
+		if err != nil {
+			if errors.Is(err, errStartTLS) {
+				return diag, timings, probe.PhaseStartTLS, probe.ReasonStartTLSFailed
+			}
+			return diag, timings, probe.PhaseStartTLS, probe.ClassifyNetworkError(err)
+		}
+	}
 
 	tlsConn := tls.Client(conn.conn, p.clientConfig())
 
@@ -211,6 +233,12 @@ func (p *Prober) run(ctx context.Context) (*Diagnostics, probe.Timings, probe.Ph
 
 	if reason := p.confirmAccepted(ctx, tlsConn); reason != probe.ReasonNone {
 		return diag, timings, probe.PhaseTLS, reason
+	}
+	if p.startTLS != StartTLSNone {
+		if deadline, ok := ctx.Deadline(); ok {
+			_ = tlsConn.SetWriteDeadline(deadline)
+		}
+		goodbye(tlsConn, p.startTLS)
 	}
 
 	return diag, timings, probe.PhaseTLS, p.policy.Evaluate(diag.TLS)

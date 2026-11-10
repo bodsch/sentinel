@@ -266,6 +266,7 @@ func tlsProbeOptions(target config.Target, caPools map[string]*x509.CertPool, cl
 		Timeout:    target.ResolvedTimeout(),
 		ServerName: strings.TrimSpace(t.ServerName),
 		ALPN:       t.ALPN,
+		StartTLS:   tlsprobe.StartTLS(t.StartTLS),
 	}
 
 	settings, err := tlsSettings(&t.TLSConfig, caPools, clientCerts)

@@ -35,6 +35,14 @@ const (
 	defaultDNSType      = "A"
 )
 
+// AllowedStartTLS is the set of supported tls.starttls protocols.
+var AllowedStartTLS = map[string]struct{}{
+	"smtp": {},
+	"imap": {},
+	"pop3": {},
+	"ldap": {},
+}
+
 // AllowedDNSTypes is the set of supported DNS record types.
 var AllowedDNSTypes = map[string]struct{}{
 	"A":     {},
@@ -290,6 +298,10 @@ type TLSProbeConfig struct {
 	// preferred first (e.g. ["h2", "http/1.1"]). The negotiated protocol is
 	// reported as sentinel_tls_alpn_info. Empty means no ALPN is offered.
 	ALPN []string `yaml:"alpn"`
+	// StartTLS names the plaintext protocol to upgrade from before the
+	// handshake: "smtp", "imap", "pop3" or "ldap". Empty (the default) expects
+	// TLS immediately on connect. Normalised to lowercase on load.
+	StartTLS string `yaml:"starttls"`
 
 	TLSConfig `yaml:",inline"`
 }

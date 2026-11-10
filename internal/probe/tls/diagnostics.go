@@ -1,6 +1,10 @@
 package tls
 
-import "bodsch.me/sentinel/internal/tlsdiag"
+import (
+	"time"
+
+	"bodsch.me/sentinel/internal/tlsdiag"
+)
 
 // Diagnostics is the TLS-probe-specific detail attached to a probe.Result. It
 // implements probe.Diagnostics via ProbeType and tlsdiag.Provider via
@@ -19,6 +23,12 @@ type Diagnostics struct {
 	// ALPN is the application protocol the server selected; empty when none was
 	// offered or agreed.
 	ALPN string
+	// StartTLS is the plaintext dialogue run before the handshake; empty for an
+	// endpoint that speaks TLS on connect.
+	StartTLS StartTLS
+	// StartTLSDuration is how long that dialogue took, from the first byte read
+	// to the server's agreement. Zero without STARTTLS.
+	StartTLSDuration time.Duration
 	// TLS holds the certificate diagnostics. It is nil only when the handshake
 	// never completed.
 	TLS *tlsdiag.Info

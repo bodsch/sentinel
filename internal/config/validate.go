@@ -222,8 +222,14 @@ func validDNSServer(s string) bool {
 // allowedDNSTypesList returns the allowed DNS types as a sorted, comma-separated
 // string for error messages.
 func allowedDNSTypesList() string {
-	keys := make([]string, 0, len(AllowedDNSTypes))
-	for k := range AllowedDNSTypes {
+	return sortedKeys(AllowedDNSTypes)
+}
+
+// sortedKeys renders the keys of an allow-list as a sorted, comma-separated
+// string for an error message.
+func sortedKeys(set map[string]struct{}) string {
+	keys := make([]string, 0, len(set))
+	for k := range set {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
@@ -403,7 +409,8 @@ func validateTLSExpect(label, prefix string, t *TLSConfig) []error {
 }
 
 // validateTLSProbe validates a standalone tls block: a non-empty host, a port in
-// range, non-blank ALPN entries, plus the shared TLS settings.
+// range, non-blank ALPN entries, a supported starttls protocol, plus the shared
+// TLS settings.
 func validateTLSProbe(label string, t *TLSProbeConfig) []error {
 	var errs []error
 
@@ -417,6 +424,12 @@ func validateTLSProbe(label string, t *TLSProbeConfig) []error {
 	for i, proto := range t.ALPN {
 		if strings.TrimSpace(proto) == "" {
 			errs = append(errs, fmt.Errorf("config: %s: tls.alpn[%d] must not be empty", label, i))
+		}
+	}
+
+	if t.StartTLS != "" {
+		if _, ok := AllowedStartTLS[t.StartTLS]; !ok {
+			errs = append(errs, fmt.Errorf("config: %s: tls.starttls %q is not supported (allowed: %s)", label, t.StartTLS, sortedKeys(AllowedStartTLS)))
 		}
 	}
 
