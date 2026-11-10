@@ -35,6 +35,8 @@ type Diagnostics struct {
 	// answer set — or, for the authoritative check, whether all nameservers
 	// returned the same SOA serial. True when there is nothing to compare.
 	Consistent bool
+	// DNSSEC summarises the DNSSEC verdict; nil unless the target set dnssec.
+	DNSSEC *DNSSECInfo
 	// Nameservers holds the per-address results of the authoritative check,
 	// sorted by host and address. Nil for an ordinary query. In that mode the
 	// top-level fields describe the NS lookup: Answers are the nameserver
@@ -59,6 +61,11 @@ type ResolverResult struct {
 	Answers []string
 	// Truncated reports a truncated final response.
 	Truncated bool
+	// Authenticated reports the AD flag: the resolver validated the answer.
+	Authenticated bool
+	// SignatureExpiry is the earliest expiration of the RRSIGs covering the
+	// answer; zero when the response carried none.
+	SignatureExpiry time.Time
 
 	// err is the transport error when the resolver produced no response.
 	err error
@@ -68,3 +75,12 @@ type ResolverResult struct {
 
 // ProbeType implements probe.Diagnostics.
 func (*Diagnostics) ProbeType() string { return ProbeType }
+
+// DNSSECInfo is the DNSSEC verdict across all resolvers of a target.
+type DNSSECInfo struct {
+	// Validated is true when every resolver that answered set the AD flag.
+	Validated bool
+	// SignatureExpiry is the earliest RRSIG expiration seen in any answer;
+	// zero when no resolver returned a signature.
+	SignatureExpiry time.Time
+}

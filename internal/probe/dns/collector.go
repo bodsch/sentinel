@@ -34,6 +34,9 @@ type Collector struct {
 	nsCode          *prometheus.Desc
 	nsAuthoritative *prometheus.Desc
 	nsSerial        *prometheus.Desc
+
+	dnssecValidated *prometheus.Desc
+	rrsigExpiry     *prometheus.Desc
 }
 
 // NewCollector builds the DNS metrics collector over the given result source.
@@ -65,6 +68,9 @@ func NewCollector(results resultSource) *Collector {
 		nsCode:          nsDesc("dns_nameserver_response_code", "DNS response code (RCODE) of a nameserver's SOA answer; -1 when it produced no response."),
 		nsAuthoritative: nsDesc("dns_nameserver_authoritative", "1 when the nameserver answered with authority (AA flag) and the zone's SOA, 0 otherwise."),
 		nsSerial:        nsDesc("dns_nameserver_soa_serial", "SOA serial a nameserver returned for the zone; absent without an answer."),
+
+		dnssecValidated: desc("dns_dnssec_validated", "1 when every resolver vouched for the answer with the AD flag; only for targets with dns.dnssec."),
+		rrsigExpiry:     desc("dns_rrsig_expiry_timestamp_seconds", "Earliest expiration of the RRSIGs covering the answer, as a Unix timestamp; only for targets with dns.dnssec that received a signature."),
 	}
 }
 
@@ -81,6 +87,8 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.nsCode
 	ch <- c.nsAuthoritative
 	ch <- c.nsSerial
+	ch <- c.dnssecValidated
+	ch <- c.rrsigExpiry
 }
 
 // Collect implements prometheus.Collector.
@@ -99,6 +107,17 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 		}
 		ch <- prometheus.MustNewConstMetric(c.responseCode, prometheus.GaugeValue, float64(diag.ResponseCode), labels...)
 		ch <- prometheus.MustNewConstMetric(c.answerCount, prometheus.GaugeValue, float64(diag.AnswerCount), labels...)
+
+		if diag.DNSSEC != nil {
+			validated := 0.0
+			if diag.DNSSEC.Validated {
+				validated = 1
+			}
+			ch <- prometheus.MustNewConstMetric(c.dnssecValidated, prometheus.GaugeValue, validated, labels...)
+			if !diag.DNSSEC.SignatureExpiry.IsZero() {
+				ch <- prometheus.MustNewConstMetric(c.rrsigExpiry, prometheus.GaugeValue, float64(diag.DNSSEC.SignatureExpiry.Unix()), labels...)
+			}
+		}
 
 		if len(diag.Nameservers) > 0 {
 			c.collectNameservers(ch, labels, diag)

@@ -213,6 +213,19 @@ targets:
       query: example.org
       type: MX
 
+  # DNSSEC: the (validating) resolver must vouch for the answer with the AD
+  # flag, otherwise dnssec_unvalidated. A bogus signature shows as dns_error
+  # (SERVFAIL). Use a resolver you operate, on a network you trust.
+  - name: dns-signed
+    interval: 5m
+    tags:
+      service: dns
+      environment: production
+    dns:
+      server: 9.9.9.9
+      query: example.org
+      dnssec: true
+
   # Zone delegation check: find the nameservers of the zone through `server`,
   # ask each of them directly for the SOA. Fails with dns_lame_delegation when
   # one answers without authority, dns_mismatch when the serials differ.

@@ -619,7 +619,7 @@ targets:
 ```
 
 Supported record types: **A, AAAA, MX, TXT, CNAME, SRV**; SOA through the
-authoritative check below. (DNSSEC validation remains future work.)
+authoritative check below. DNSSEC: see *DNSSEC* below.
 
 CNAME and SRV examples:
 
@@ -697,6 +697,50 @@ The probe takes as long as the slowest resolver. `sentinel_dns_*` keeps
 describing the first resolver (the duration is the whole probe), and each
 resolver gets its own series with a `resolver` label — see `metrics.md` →
 *DNS Metrics*. `server: x` behaves exactly like before and adds no series.
+
+### DNSSEC
+
+`dnssec: true` requires the resolver to vouch for the answer:
+
+```
+targets:
+  - name: www-signed
+    dns:
+      server: 10.0.0.53     # a validating resolver
+      query: www.example.org
+      dnssec: true
+```
+
+The query carries the DO bit and the AD flag; the response must come back with
+**AD set**, i.e. the resolver validated the signatures. Otherwise:
+
+| Situation | Result |
+|---|---|
+| AD missing — zone unsigned, or resolver does not validate | `dnssec_unvalidated` |
+| Signature bogus — a validating resolver answers SERVFAIL | `dns_error` |
+
+With `servers`, every resolver must set AD; `dnssec_unvalidated` outranks
+`expected` and the answer comparison, because an answer nobody vouched for is
+not worth comparing.
+
+Sentinel trusts the resolver's verdict and does **not** validate the chain
+itself. The AD flag is only as trustworthy as the path to the resolver: point
+the check at a resolver you operate, on a network you trust (the flag travels
+unprotected over plain DNS). The point of the check is to notice that the
+zone stopped being signed, or that signing broke — not to replace a
+validating resolver.
+
+`sentinel_dns_dnssec_validated` reports the verdict and
+`sentinel_dns_rrsig_expiry_timestamp_seconds` the earliest expiry of the
+signatures over the queried type. Signatures are re-made continuously, so an
+expiry that keeps approaching means the signer has stopped:
+
+```
+sentinel_dns_rrsig_expiry_timestamp_seconds - time() < 3 * 86400
+```
+
+`dnssec` is not allowed with `authoritative` (authoritative servers do not
+validate).
 
 ### Checking a zone's nameservers
 

@@ -383,6 +383,7 @@ func dnsOptions(target config.Target) dnsprobe.Options {
 
 		Authoritative: d.Authoritative,
 		Family:        dnsprobe.Family(d.NameserverFamily),
+		DNSSEC:        d.DNSSEC,
 	}
 }
 

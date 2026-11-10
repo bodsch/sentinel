@@ -136,6 +136,11 @@ func TestDNSValidationErrors(t *testing.T) {
 			wantSub: "dns.type \"SOA\" is not supported",
 		},
 		{
+			name:    "dnssec with authoritative",
+			yaml:    "targets:\n  - name: x\n    dns:\n      server: 1.1.1.1\n      query: example.org\n      authoritative: true\n      dnssec: true\n",
+			wantSub: "dns.dnssec is not allowed with dns.authoritative",
+		},
+		{
 			name:    "both http and dns",
 			yaml:    "targets:\n  - name: x\n    http:\n      url: https://a.example\n    dns:\n      server: 1.1.1.1\n      query: a.example\n",
 			wantSub: "multiple protocol blocks",
