@@ -21,13 +21,15 @@ type countingServer struct {
 	conns atomic.Int32
 	ln    net.Listener
 	// delayAfterFirst holds every connection but the first before its
-	// handshake, which makes an enumeration slow and easy to tell apart.
+	// handshake, which makes an enumeration slow and easy to tell apart. It is
+	// fixed at construction: the accept loop reads it concurrently.
 	delayAfterFirst time.Duration
 }
 
 // newCountingServer starts a TLS listener with cfg that completes handshakes and
-// closes.
-func newCountingServer(t *testing.T, cfg *tls.Config) *countingServer {
+// closes; every connection after the first waits delayAfterFirst before its
+// handshake (zero: no delay).
+func newCountingServer(t *testing.T, cfg *tls.Config, delayAfterFirst time.Duration) *countingServer {
 	t.Helper()
 	ln, err := tls.Listen("tcp", "127.0.0.1:0", cfg)
 	if err != nil {
@@ -35,7 +37,7 @@ func newCountingServer(t *testing.T, cfg *tls.Config) *countingServer {
 	}
 	t.Cleanup(func() { _ = ln.Close() })
 	addr := ln.Addr().(*net.TCPAddr)
-	s := &countingServer{host: addr.IP.String(), port: addr.Port, ln: ln}
+	s := &countingServer{host: addr.IP.String(), port: addr.Port, ln: ln, delayAfterFirst: delayAfterFirst}
 	go func() {
 		for {
 			conn, aerr := ln.Accept()
@@ -91,7 +93,7 @@ func TestEnumerateModernServer(t *testing.T) {
 	t.Parallel()
 
 	ca := newAuthority(t, "Sentinel Enumeration CA")
-	srv := newCountingServer(t, serverConfig(ca.issue(t, leafOptions{}))) // TLS 1.2+
+	srv := newCountingServer(t, serverConfig(ca.issue(t, leafOptions{})), 0) // TLS 1.2+
 
 	res := runProbe(t, srv.enumOptions(ca, &EnumerateOptions{ForbidVersions: []uint16{tls.VersionTLS10, tls.VersionTLS11}, ForbidInsecureCiphers: true}))
 	if !res.Success {
@@ -132,7 +134,7 @@ func TestEnumeratePolicy(t *testing.T) {
 		tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA,
 		tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256, // insecure per crypto/tls
 	}
-	srv := newCountingServer(t, legacy)
+	srv := newCountingServer(t, legacy, 0)
 
 	tests := []struct {
 		name string
@@ -171,7 +173,7 @@ func TestEnumerateInterval(t *testing.T) {
 	ca := newAuthority(t, "Sentinel Enumeration CA")
 	legacy := serverConfig(ca.issue(t, leafOptions{}))
 	legacy.MinVersion = tls.VersionTLS10
-	srv := newCountingServer(t, legacy)
+	srv := newCountingServer(t, legacy, 0)
 
 	p, err := New(srv.enumOptions(ca, &EnumerateOptions{ForbidVersions: []uint16{tls.VersionTLS10}}))
 	if err != nil {
@@ -208,8 +210,7 @@ func TestEnumerateKeepsMeasurementClean(t *testing.T) {
 	t.Parallel()
 
 	ca := newAuthority(t, "Sentinel Enumeration CA")
-	srv := newCountingServer(t, serverConfig(ca.issue(t, leafOptions{})))
-	srv.delayAfterFirst = 100 * time.Millisecond
+	srv := newCountingServer(t, serverConfig(ca.issue(t, leafOptions{})), 100*time.Millisecond)
 	p, err := New(srv.enumOptions(ca, &EnumerateOptions{}))
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -235,7 +236,7 @@ func TestEnumerateUnknownIsNotUnsupported(t *testing.T) {
 	t.Parallel()
 
 	ca := newAuthority(t, "Sentinel Enumeration CA")
-	srv := newCountingServer(t, serverConfig(ca.issue(t, leafOptions{})))
+	srv := newCountingServer(t, serverConfig(ca.issue(t, leafOptions{})), 0)
 	p, err := New(srv.enumOptions(ca, &EnumerateOptions{ForbidVersions: []uint16{tls.VersionTLS10}}))
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -325,8 +326,7 @@ func TestEnumerateTimeoutIsUnknown(t *testing.T) {
 	t.Parallel()
 
 	ca := newAuthority(t, "Sentinel Enumeration CA")
-	srv := newCountingServer(t, serverConfig(ca.issue(t, leafOptions{})))
-	srv.delayAfterFirst = 2 * time.Second
+	srv := newCountingServer(t, serverConfig(ca.issue(t, leafOptions{})), 2*time.Second)
 	opts := srv.enumOptions(ca, &EnumerateOptions{})
 	opts.Timeout = 200 * time.Millisecond
 
@@ -354,7 +354,7 @@ func TestEnumerateLegacyOnlyServer(t *testing.T) {
 	ca := newAuthority(t, "Sentinel Enumeration CA")
 	legacy := serverConfig(ca.issue(t, leafOptions{}))
 	legacy.MinVersion, legacy.MaxVersion = tls.VersionTLS10, tls.VersionTLS10
-	srv := newCountingServer(t, legacy)
+	srv := newCountingServer(t, legacy, 0)
 
 	res := runProbe(t, srv.enumOptions(ca, &EnumerateOptions{ForbidVersions: []uint16{tls.VersionTLS10}}))
 	if res.Success {
@@ -382,7 +382,7 @@ func TestEnumerateInsecureOnlyServer(t *testing.T) {
 	cfg := serverConfig(ca.issue(t, leafOptions{}))
 	cfg.MaxVersion = tls.VersionTLS12
 	cfg.CipherSuites = []uint16{tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256}
-	srv := newCountingServer(t, cfg)
+	srv := newCountingServer(t, cfg, 0)
 
 	res := runProbe(t, srv.enumOptions(ca, &EnumerateOptions{ForbidInsecureCiphers: true}))
 	e := diag(t, res).Enumeration
