@@ -855,44 +855,6 @@ histogram_quantile(0.95, rate(sentinel_http_ttfb_seconds_bucket[5m]))
 
 ---
 
-## Baseline Metrics
-
-Future feature.
-
-Sentinel can calculate deviations against historical behavior.
-
-Example:
-
-```
-sentinel_http_ttfb_baseline_seconds
-
-sentinel_http_ttfb_deviation_ratio
-```
-
-Example:
-
-```
-Current:
-
-300ms
-
-Baseline:
-
-50ms
-
-Deviation:
-
-6x
-```
-
-Possible alert:
-
-```
-sentinel_http_ttfb_deviation_ratio > 5
-```
-
----
-
 ## Recommended Alerts
 
 ### Service unavailable

@@ -25,7 +25,7 @@ The configuration is designed for:
 > `timeout`, and three protocols: **HTTP** (methods GET/HEAD/POST/PUT/PATCH/DELETE, request body,
 > custom headers, Basic/Bearer auth, per-target `max_body_bytes`), **DNS** (A/AAAA/MX/TXT/CNAME/SRV), and
 > **TCP** (connect + `banner_regex`). Response validators are status / body_regex / headers /
-> **JSONPath** (`expect.json`). Sections marked **(0.2+ / planned)** below — templates, retry,
+> **JSONPath** (`expect.json`). Sections marked **(0.2+ / planned)** below — templates,
 > per-target proxy, per-phase timeouts, **XPath**, hot reload, and the standalone `icmp`/`tls`/
 > `network` blocks — are not yet implemented. Config is loaded once at startup; there is no hot
 > reload yet.
@@ -126,8 +126,8 @@ defaults:
 
 All targets inherit these settings.
 
-> **Note:** `retries` (see Retry Configuration) is not implemented yet and is
-> rejected as an unknown field. There is no `validate_tls` field either: TLS is
+> **Note:** there is no `retries` field (see Retry); it is rejected as an
+> unknown field. There is no `validate_tls` field either: TLS is
 > always inspected for HTTPS targets (expiry, hostname, remaining days) — see the
 > TLS section. Unknown fields fail validation, so keep example configs to the
 > fields your version supports.
@@ -803,30 +803,16 @@ targets:
 ```
 ---
 
-## Retry Configuration (0.2+)
+## Retry
 
-> Not implemented yet. A probe run is a single attempt. Transient failures are meant to be
-> damped in Prometheus alerting rules (`for:`), where alert tolerance already lives, rather than in
-> the exporter. In-probe retry (with its own metrics and timeout interaction) is a 0.2 feature.
+Not planned. A probe run is a single attempt: a retry inside the probe would hide the very failure
+the probe exists to report and distort the latency it measures. Damp transient failures in the
+Prometheus alerting rules instead, where alert tolerance already lives:
 
-Transient failures should not immediately trigger alerts.
-
-Example:
-```
-retry:
-  attempts: 3
-  delay: 5s
-```
-Execution:
-
-```
-Attempt 1
-   |
-Failure
-   |
-Wait 5 seconds
-   |
-Attempt 2
+```yaml
+- alert: SentinelProbeFailing
+  expr: sentinel_probe_success == 0
+  for: 2m
 ```
 
 ---
