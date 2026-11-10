@@ -35,12 +35,14 @@ const (
 	defaultDNSType      = "A"
 )
 
-// AllowedDNSTypes is the set of DNS record types supported in 0.2.
+// AllowedDNSTypes is the set of supported DNS record types.
 var AllowedDNSTypes = map[string]struct{}{
-	"A":    {},
-	"AAAA": {},
-	"MX":   {},
-	"TXT":  {},
+	"A":     {},
+	"AAAA":  {},
+	"MX":    {},
+	"TXT":   {},
+	"CNAME": {},
+	"SRV":   {},
 }
 
 // AllowedLabelTags is the fixed set of target tag keys that may become Prometheus
@@ -234,10 +236,11 @@ type DNSConfig struct {
 	Server string `yaml:"server"`
 	// Query is the name to look up (e.g. "example.org").
 	Query string `yaml:"query"`
-	// Type is the record type: A, AAAA, MX or TXT. Defaults to A.
+	// Type is the record type: A, AAAA, MX, TXT, CNAME or SRV. Defaults to A.
 	Type string `yaml:"type"`
 	// Expected is an optional set of expected answer strings. When set, at least
-	// one answer must match one expected value.
+	// one answer must match one expected value. SRV values are written as
+	// "priority weight port target", e.g. "10 5 5060 sip.example.org".
 	Expected []string `yaml:"expected"`
 }
 

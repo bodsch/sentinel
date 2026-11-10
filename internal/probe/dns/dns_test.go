@@ -262,3 +262,92 @@ func TestType(t *testing.T) {
 		t.Errorf("Type() = %q, want %q", p.Type(), ProbeType)
 	}
 }
+
+func TestProbeCNAME(t *testing.T) {
+	t.Parallel()
+	addr := startTestDNS(t, answerHandler(t, "www.example.org. 60 IN CNAME Edge.CDN.example.net."))
+
+	res := run(t, opts(addr, "www.example.org", "CNAME", "edge.cdn.example.net"))
+	if !res.Success {
+		t.Fatalf("expected success, got %q; answers=%v", res.FailureReason, diag(t, res).Answers)
+	}
+	if d := diag(t, res); len(d.Answers) != 1 || d.Answers[0] != "Edge.CDN.example.net" {
+		t.Errorf("CNAME answers = %v, want [Edge.CDN.example.net]", d.Answers)
+	}
+}
+
+func TestProbeCNAMEMismatch(t *testing.T) {
+	t.Parallel()
+	addr := startTestDNS(t, answerHandler(t, "www.example.org. 60 IN CNAME other.example.net."))
+
+	res := run(t, opts(addr, "www.example.org", "CNAME", "edge.cdn.example.net"))
+	if res.FailureReason != probe.ReasonValidationFailed {
+		t.Fatalf("reason = %q, want validation_failed", res.FailureReason)
+	}
+}
+
+// TestProbeAIgnoresCNAMEInChain pins that an A query answered with a CNAME chain
+// reports only the A records, while a CNAME query reports the alias.
+func TestProbeAIgnoresCNAMEInChain(t *testing.T) {
+	t.Parallel()
+	addr := startTestDNS(t, answerHandler(t,
+		"www.example.org. 60 IN CNAME edge.example.net.",
+		"edge.example.net. 60 IN A 192.0.2.7",
+	))
+
+	if d := diag(t, run(t, opts(addr, "www.example.org", "A"))); len(d.Answers) != 1 || d.Answers[0] != "192.0.2.7" {
+		t.Errorf("A answers = %v, want [192.0.2.7]", d.Answers)
+	}
+}
+
+func TestProbeSRV(t *testing.T) {
+	t.Parallel()
+	addr := startTestDNS(t, answerHandler(t,
+		"_sip._tcp.example.org. 60 IN SRV 10 5 5060 sip1.example.org.",
+		"_sip._tcp.example.org. 60 IN SRV 20 0 5060 sip2.example.org.",
+	))
+
+	res := run(t, opts(addr, "_sip._tcp.example.org", "SRV", "20  0 5060 SIP2.example.org."))
+	if !res.Success {
+		t.Fatalf("expected success, got %q; answers=%v", res.FailureReason, diag(t, res).Answers)
+	}
+	d := diag(t, res)
+	want := []string{"10 5 5060 sip1.example.org", "20 0 5060 sip2.example.org"}
+	if len(d.Answers) != len(want) || d.Answers[0] != want[0] || d.Answers[1] != want[1] {
+		t.Errorf("SRV answers = %v, want %v", d.Answers, want)
+	}
+}
+
+// TestProbeSRVMismatch checks that every SRV field takes part in the match: a
+// moved port or a changed priority is a validation failure.
+func TestProbeSRVMismatch(t *testing.T) {
+	t.Parallel()
+	addr := startTestDNS(t, answerHandler(t, "_sip._tcp.example.org. 60 IN SRV 10 5 5060 sip1.example.org."))
+
+	for name, expected := range map[string]string{
+		"port":     "10 5 5061 sip1.example.org",
+		"priority": "20 5 5060 sip1.example.org",
+		"weight":   "10 6 5060 sip1.example.org",
+		"target":   "10 5 5060 sip9.example.org",
+	} {
+		t.Run(name, func(t *testing.T) {
+			res := run(t, opts(addr, "_sip._tcp.example.org", "SRV", expected))
+			if res.FailureReason != probe.ReasonValidationFailed {
+				t.Fatalf("reason = %q, want validation_failed", res.FailureReason)
+			}
+		})
+	}
+}
+
+func TestParseSRV(t *testing.T) {
+	t.Parallel()
+
+	if v, ok := parseSRV(" 1\t2  3 host.example. "); !ok || v.priority != 1 || v.weight != 2 || v.port != 3 || v.target != "host.example." {
+		t.Errorf("parseSRV = %+v, %v", v, ok)
+	}
+	for _, bad := range []string{"", "1 2 3", "1 2 3 h extra", "a 2 3 h", "1 2 65536 h", "1 -2 3 h"} {
+		if _, ok := parseSRV(bad); ok {
+			t.Errorf("parseSRV(%q) ok, want failure", bad)
+		}
+	}
+}

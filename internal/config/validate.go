@@ -167,7 +167,32 @@ func validateDNS(label string, d *DNSConfig) []error {
 		}
 	}
 
+	// A malformed SRV expectation could never match; reject it here instead of
+	// letting the target fail validation_failed forever.
+	if d.Type == "SRV" {
+		for i, e := range d.Expected {
+			if strings.TrimSpace(e) != "" && !validSRVValue(e) {
+				errs = append(errs, fmt.Errorf("config: %s: dns.expected[%d] %q must be \"priority weight port target\" (e.g. \"10 5 5060 sip.example.org\")", label, i, e))
+			}
+		}
+	}
+
 	return errs
+}
+
+// validSRVValue reports whether s has the SRV form "priority weight port
+// target": four whitespace-separated fields, the first three numbers in 0-65535.
+func validSRVValue(s string) bool {
+	fields := strings.Fields(s)
+	if len(fields) != 4 {
+		return false
+	}
+	for _, f := range fields[:3] {
+		if _, err := strconv.ParseUint(f, 10, 16); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // validDNSServer reports whether s is a bare host or a host:port. It rejects

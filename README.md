@@ -30,7 +30,7 @@ already ships:
 - **TLS diagnostics** across the whole certificate chain: earliest expiry, chain length and trust,
   negotiated version and cipher, certificate identity and key strength, OCSP stapling, plus opt-in
   per-target expectations (`http.tls.expect`)
-- a **DNS** probe (A/AAAA/MX/TXT), a **TCP** probe (connection check + optional banner validation)
+- a **DNS** probe (A/AAAA/MX/TXT/CNAME/SRV), a **TCP** probe (connection check + optional banner validation)
   and a **TLS** probe for any endpoint speaking TLS on connect (LDAPS, SMTPS, IMAPS, MQTT, …)
 - response validators: status, body regex, header match, and **JSONPath** (`expect.json`)
 - latency **histograms** fed at probe time, plus per-phase gauges and `go_*`/`process_*` runtime metrics
@@ -233,7 +233,7 @@ chapter also maps every blackbox_exporter TLS series to its Sentinel counterpart
 ### Implemented
 
 - HTTP / HTTPS
-- DNS (A, AAAA, MX, TXT)
+- DNS (A, AAAA, MX, TXT, CNAME, SRV)
 - TCP (connection check + optional `banner_regex` validation)
 
 ### Planned
