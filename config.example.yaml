@@ -240,6 +240,31 @@ targets:
       authoritative: true
       nameserver_family: ipv4   # ipv4 (default), ipv6 or both
 
+  # CNAME: the alias must point at the expected canonical name.
+  - name: dns-cname
+    interval: 5m
+    tags:
+      service: dns
+      environment: production
+    dns:
+      server: 1.1.1.1
+      query: www.example.org
+      type: CNAME
+      expected: [edge.cdn.example.net]
+
+  # SRV: expectations use zone-file order "priority weight port target".
+  - name: dns-srv
+    interval: 5m
+    tags:
+      service: dns
+      environment: production
+    dns:
+      server: 1.1.1.1
+      query: _sip._tcp.example.org
+      type: SRV
+      expected:
+        - "10 5 5060 sip.example.org"
+
   # DNS MX check (no expected values: success = NOERROR, count via metrics).
   - name: dns-mx-record
     interval: 1m

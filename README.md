@@ -244,10 +244,8 @@ chapter also maps every blackbox_exporter TLS series to its Sentinel counterpart
 ### Planned
 
 - ICMP
-- SMTP
-- IMAP
-- POP3
-- LDAP
+- SMTP, IMAP, POP3, LDAP as protocol checks (banner, authentication, mailbox
+  access) — their TLS side, including STARTTLS, is already covered by the TLS probe
 - MQTT
 - SSH
 - NTP
@@ -271,10 +269,10 @@ Architecture Overview
                   | Worker Pool   |
                   +-------+-------+
                           |
-        +-----------------+----------------+
-        |                 |                |
-        v                 v                v
-     HTTP Probe       DNS Probe       TCP Probe
+        +-----------+-----------+-----------+
+        |           |           |           |
+        v           v           v           v
+    HTTP Probe  DNS Probe   TCP Probe   TLS Probe
                           |
                           v
                      Validation Pipeline

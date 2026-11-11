@@ -5,9 +5,12 @@
 **Versions 0.1 and 0.2 are implemented and shipped.** The runtime skeleton
 (configuration → scheduler → probe → result store → `/metrics`) is complete, and
 four protocols run end-to-end: HTTP/HTTPS (full phase timing, methods, body,
-headers, auth, redirect handling, TLS chain verification), DNS (A/AAAA/MX/TXT/CNAME/SRV),
-TCP (connect + banner) and TLS (any endpoint speaking TLS on connect: LDAPS,
-SMTPS, IMAPS, MQTT …). Response validators cover status / body-regex /
+headers, auth, redirect handling, TLS chain verification), DNS (A/AAAA/MX/TXT/CNAME/SRV,
+resolver comparison, a zone's nameservers checked for authority and SOA serial,
+DNSSEC via the resolver's AD flag), TCP (connect + banner) and TLS (any endpoint
+speaking TLS on connect — LDAPS, SMTPS, IMAPS, MQTT … — or after a STARTTLS
+upgrade for SMTP, IMAP, POP3 and LDAP, with optional enumeration of the accepted
+versions and cipher suites). Response validators cover status / body-regex /
 header / JSONPath, latency histograms are fed at probe time, and the build ships
 with security tooling (golangci-lint incl. gosec, govulncheck) and Forgejo CI /
 release pipelines. Later versions (0.3+) below are still planned; items dropped during triage are
@@ -323,9 +326,13 @@ Planned:
 
 ### DNS Improvements
 
-Planned:
-
-- DNSSEC validation
+- ~~DNSSEC validation~~ **(implemented, via the resolver)**: `dns.dnssec`
+  sets the DO bit and requires the resolver's AD flag, otherwise the new
+  failure reason `dnssec_unvalidated`; a bogus signature shows as `dns_error`
+  (SERVFAIL). `sentinel_dns_rrsig_expiry_timestamp_seconds` reports the
+  earliest signature expiry, so a stalled signer is visible days ahead.
+  Sentinel trusts the resolver's verdict; validating the chain itself was
+  considered and declined as security-sensitive custom code.
 - ~~resolver comparison, multiple resolvers~~ **(implemented)**: `dns.servers`
   queries up to ten resolvers in parallel; every one must answer NOERROR and all
   must return the same answer set, otherwise the new failure reason
