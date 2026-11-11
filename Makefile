@@ -25,7 +25,7 @@ LDFLAGS := -s -w \
 export CGO_ENABLED := 0
 
 # Release target platforms.
-PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
+PLATFORMS := linux/amd64 linux/arm64 darwin/arm64
 
 GO         := go
 GOLANGCI   := golangci-lint
