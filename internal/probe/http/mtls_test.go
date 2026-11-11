@@ -103,6 +103,46 @@ func TestClientCertificateSentToTarget(t *testing.T) {
 	}
 }
 
+// TestClientCertificateMissing: a target that requires mutual TLS and gets no
+// identity must fail as a TLS problem. Under TLS 1.3 the server's rejection
+// arrives only after the client considers the handshake done, as an alert on
+// the first read; reported as network_error it would send the operator
+// looking at firewalls instead of the missing client_cert in the config.
+func TestClientCertificateMissing(t *testing.T) {
+	t.Parallel()
+
+	_, clientCAs := clientIdentity(t)
+	serverCert := makeCert(t, time.Now().Add(-time.Hour), time.Now().Add(48*time.Hour), nil, localhostIPs())
+	for _, version := range []uint16{tls.VersionTLS12, tls.VersionTLS13} {
+		t.Run(tls.VersionName(version), func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewUnstartedServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+				w.WriteHeader(200)
+			}))
+			srv.TLS = &tls.Config{
+				Certificates: []tls.Certificate{serverCert},
+				ClientAuth:   tls.RequireAndVerifyClientCert,
+				ClientCAs:    clientCAs,
+				MinVersion:   version,
+				MaxVersion:   version,
+			}
+			srv.StartTLS()
+			defer srv.Close()
+
+			opts := baseOpts(srv.URL)
+			opts.TLSRoots = certPool(t, serverCert)
+			res := runProbe(t, opts)
+			if res.Success {
+				t.Fatal("probe succeeded without the required client certificate")
+			}
+			if res.FailureReason != probe.ReasonTLSError {
+				t.Errorf("reason = %q, want tls_error", res.FailureReason)
+			}
+		})
+	}
+}
+
 // TestClientCertificateOriginGuard is the security test for mutual TLS, aimed
 // straight at the callback that enforces it.
 //

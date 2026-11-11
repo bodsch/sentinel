@@ -262,10 +262,11 @@ func TestProbeMutualTLS(t *testing.T) {
 		if res.Success {
 			t.Fatal("probe succeeded without the required client certificate")
 		}
-		// The server rejects after our side finished, so the exact reason is
-		// transport-level; what matters is that it fails rather than passing.
-		if res.FailureReason == probe.ReasonNone {
-			t.Error("failure reason not set")
+		// Under TLS 1.3 the server rejects after our side finished; its alert
+		// still has to read as a TLS failure, not as a network one, or the
+		// operator looks for the fault in the wrong place.
+		if res.FailureReason != probe.ReasonTLSError {
+			t.Errorf("reason = %q, want tls_error", res.FailureReason)
 		}
 	})
 }

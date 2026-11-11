@@ -294,6 +294,32 @@ func TestAuthoritativeFamilies(t *testing.T) {
 	}
 }
 
+// TestAuthoritativeCapsAddressesPerNameserver: the addresses come from a
+// resolver answer, so their number is not under our control. Without the cap a
+// hostile or broken answer with hundreds of A records would make every probe
+// fire hundreds of concurrent queries.
+func TestAuthoritativeCapsAddressesPerNameserver(t *testing.T) {
+	t.Parallel()
+
+	lines := []string{"example.org. 3600 IN NS ns1.example.net."}
+	servers := map[string]string{}
+	healthy := startTestDNS(t, (&nameserver{serial: 7, authoritative: true}).handler())
+	for i := range maxAddressesPerNameserver + 3 {
+		ip := fmt.Sprintf("192.0.2.%d", i+1)
+		lines = append(lines, "ns1.example.net. 3600 IN A "+ip)
+		servers[ip] = healthy
+	}
+
+	p := authProber(t, startTestDNS(t, zoneHandler(t, lines...)), FamilyIPv4, servers)
+	res := p.Probe(t.Context())
+	if !res.Success {
+		t.Fatalf("probe failed: %q", res.FailureReason)
+	}
+	if n := len(diag(t, res).Nameservers); n != maxAddressesPerNameserver {
+		t.Errorf("queried %d addresses, want the cap of %d", n, maxAddressesPerNameserver)
+	}
+}
+
 func TestNSHostsCapped(t *testing.T) {
 	t.Parallel()
 

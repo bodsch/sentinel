@@ -1,6 +1,7 @@
 package tls
 
 import (
+	"context"
 	"crypto/tls"
 	"net"
 	"sync/atomic"
@@ -396,5 +397,127 @@ func TestEnumerateInsecureOnlyServer(t *testing.T) {
 	// first; that failure is the reason, the enumeration shows why.
 	if res.Success || res.FailureReason == probe.ReasonTLSPolicyViolation {
 		t.Errorf("reason = %q, want the regular handshake's failure", res.FailureReason)
+	}
+}
+
+// TestEnumerateStopsOnShutdown: the enumeration runs on the scheduler's
+// context, not the probe's timeout, so cancelling that context is the only
+// thing that ends a slow run. If it were ignored, a shutdown would wait for
+// every remaining handshake — rounds of four, each up to the target's timeout —
+// and the service manager would kill the process mid-write.
+func TestEnumerateStopsOnShutdown(t *testing.T) {
+	t.Parallel()
+
+	ca := newAuthority(t, "Sentinel Enumeration CA")
+	srv := newCountingServer(t, serverConfig(ca.issue(t, leafOptions{})), 30*time.Second)
+	opts := srv.enumOptions(ca, &EnumerateOptions{})
+	opts.Timeout = 20 * time.Second
+
+	p, err := New(opts)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go func() {
+		// The first connection is the regular probe; the second one is the
+		// enumeration under way.
+		for srv.conns.Load() < 2 {
+			time.Sleep(5 * time.Millisecond)
+		}
+		cancel()
+	}()
+
+	done := make(chan probe.Result, 1)
+	start := time.Now()
+	go func() { done <- p.Probe(ctx) }()
+
+	select {
+	case res := <-done:
+		if elapsed := time.Since(start); elapsed > 5*time.Second {
+			t.Errorf("probe returned after %s, want promptly after the cancellation", elapsed)
+		}
+		if !res.Success {
+			t.Errorf("reason = %q: a cancelled enumeration must not fail the regular probe", res.FailureReason)
+		}
+		e := diag(t, res).Enumeration
+		if e == nil || e.Complete {
+			t.Fatalf("enumeration = %+v, want an incomplete one", e)
+		}
+		for _, v := range e.Versions {
+			if v.Known && !v.Supported {
+				t.Errorf("%s reported unsupported, but its handshake was cut short by the cancellation", tls.VersionName(v.Version))
+			}
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("probe kept enumerating after its context was cancelled; a shutdown would hang for minutes")
+	}
+}
+
+// TestEnumerateThroughStartTLS: on a STARTTLS port every enumeration handshake
+// has to upgrade first. Without that, each ClientHello lands on the plaintext
+// SMTP dialogue, is refused, and counts as a definite "not supported" — the
+// metrics would claim the mail server accepts no TLS version at all.
+func TestEnumerateThroughStartTLS(t *testing.T) {
+	t.Parallel()
+
+	ca := newAuthority(t, "Sentinel STARTTLS Test CA")
+	cfg := serverConfig(ca.issue(t, leafOptions{}))
+	cfg.MinVersion, cfg.MaxVersion = tls.VersionTLS12, tls.VersionTLS12
+	srv := newStartTLSServer(t, cfg, smtpScript([]string{"mail.example", "STARTTLS"}, "220 go ahead\r\n"))
+
+	opts := srv.options(StartTLSSMTP)
+	opts.Roots = ca.pool
+	opts.Enumerate = &EnumerateOptions{}
+
+	res := runProbe(t, opts)
+	if !res.Success {
+		t.Fatalf("main probe failed: %q", res.FailureReason)
+	}
+	e := diag(t, res).Enumeration
+	if e == nil || !e.Complete {
+		t.Fatalf("enumeration = %+v, want a complete one", e)
+	}
+	for v, want := range map[uint16]bool{tls.VersionTLS11: false, tls.VersionTLS12: true, tls.VersionTLS13: false} {
+		if got := versionOf(t, e, v); got.Supported != want {
+			t.Errorf("%s supported = %v, want %v", tls.VersionName(v), got.Supported, want)
+		}
+	}
+	if got := cipherOf(t, e, tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256); !got.Supported {
+		t.Error("the suite the server negotiates is reported unsupported")
+	}
+}
+
+// TestEnumerateWithClientCertificate: a server that requires a client
+// certificate rejects every handshake without one. The enumeration must
+// present the target's identity, or it reports a mutual-TLS endpoint as
+// accepting no TLS 1.2 at all.
+func TestEnumerateWithClientCertificate(t *testing.T) {
+	t.Parallel()
+
+	serverCA := newAuthority(t, "Sentinel Server CA")
+	clientCA := newAuthority(t, "Sentinel Client CA")
+	cfg := serverConfig(serverCA.issue(t, leafOptions{}))
+	cfg.ClientAuth = tls.RequireAndVerifyClientCert
+	cfg.ClientCAs = clientCA.pool
+	srv := newCountingServer(t, cfg, 0)
+
+	clientCert := clientCA.issue(t, leafOptions{cn: "sentinel-client", client: true})
+	opts := srv.enumOptions(serverCA, &EnumerateOptions{})
+	opts.ClientCert = &clientCert
+
+	res := runProbe(t, opts)
+	if !res.Success {
+		t.Fatalf("main probe failed: %q", res.FailureReason)
+	}
+	e := diag(t, res).Enumeration
+	if e == nil {
+		t.Fatal("no enumeration")
+	}
+	if got := versionOf(t, e, tls.VersionTLS12); !got.Known || !got.Supported {
+		t.Errorf("TLS 1.2 = %+v, want supported: the enumeration did not present the client certificate", got)
+	}
+	if e.CipherVersion != tls.VersionTLS12 {
+		t.Errorf("cipher version = %s, want TLS 1.2", tls.VersionName(e.CipherVersion))
 	}
 }
