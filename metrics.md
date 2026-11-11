@@ -244,6 +244,12 @@ network_error
 `network_error` is the catch-all for network-level failures that do not match a
 more specific reason, so an unusual error is never silently misclassified.
 
+`tls_error` covers every handshake the server refused after the TCP connection
+succeeded: a TLS alert (no shared protocol version or cipher suite, a rejected
+or missing client certificate), a reply that is not TLS at all (a plaintext
+port), or a server that hangs up on the ClientHello. It points at the server's
+TLS configuration, not at the network.
+
 `certificate_expiring` and `tls_policy_violation` occur **only** for targets that
 opted in via `tls.expect` (see `configuration.md` → *TLS expectations*). They
 describe a connection that was cryptographically sound but breached a declared

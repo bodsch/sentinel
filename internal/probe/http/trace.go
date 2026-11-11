@@ -27,6 +27,9 @@ type hopTrace struct {
 	tlsStart     time.Time
 	tlsDone      time.Time
 	firstByte    time.Time
+	// tlsErr is the error the TLS handshake ended with, nil when it succeeded
+	// or did not run.
+	tlsErr error
 }
 
 // newHopTrace returns an empty hopTrace.
@@ -46,9 +49,27 @@ func (t *hopTrace) clientTrace() *httptrace.ClientTrace {
 		ConnectStart:         func(_, _ string) { t.setIfZero(&t.connectStart) },
 		ConnectDone:          func(_, _ string, _ error) { t.setIfZero(&t.connectDone) },
 		TLSHandshakeStart:    func() { t.set(&t.tlsStart) },
-		TLSHandshakeDone:     func(tls.ConnectionState, error) { t.set(&t.tlsDone) },
+		TLSHandshakeDone:     t.handshakeDone,
 		GotFirstResponseByte: func() { t.set(&t.firstByte) },
 	}
+}
+
+// handshakeDone records the end of the TLS handshake and its error.
+func (t *hopTrace) handshakeDone(_ tls.ConnectionState, err error) {
+	t.mu.Lock()
+	t.tlsDone = time.Now()
+	t.tlsErr = err
+	t.mu.Unlock()
+}
+
+// handshakeError returns the error the TLS handshake ended with, or nil when it
+// succeeded or did not run. A round trip that failed with a handshake error is
+// classified from this error, which is the one crypto/tls returned before
+// net/http wrapped it.
+func (t *hopTrace) handshakeError() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.tlsErr
 }
 
 // set records now into the given field under the lock.

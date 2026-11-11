@@ -252,7 +252,7 @@ func (p *Prober) run(ctx context.Context) (*Diagnostics, probe.Timings, probe.Ph
 		if p.reason != probe.ReasonNone {
 			return diag, timings, probe.PhaseTLS, p.reason
 		}
-		return diag, timings, probe.PhaseTLS, probe.ClassifyNetworkError(err)
+		return diag, timings, probe.PhaseTLS, probe.ClassifyHandshakeError(err)
 	}
 
 	if reason := p.confirmAccepted(ctx, tlsConn); reason != probe.ReasonNone {

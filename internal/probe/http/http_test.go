@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"crypto/tls"
+	"net"
 	nethttp "net/http"
 	"net/http/httptest"
 	"strings"
@@ -530,6 +531,59 @@ func TestTLSToPlainPort(t *testing.T) {
 	if res.FailureReason != probe.ReasonTLSError {
 		t.Fatalf("reason = %q, want tls_error", res.FailureReason)
 	}
+}
+
+// TestTLSHandshakeRefused covers servers that refuse the handshake after the TCP
+// connection succeeded. net/http wraps the handshake error; the probe must
+// still report a TLS failure rather than a network one.
+func TestTLSHandshakeRefused(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no shared version", func(t *testing.T) {
+		t.Parallel()
+
+		cert := makeCert(t, time.Now().Add(-time.Hour), time.Now().Add(48*time.Hour), nil, []net.IP{net.ParseIP("127.0.0.1")})
+		srv := httptest.NewUnstartedServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {}))
+		srv.TLS = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13}
+		srv.StartTLS()
+		defer srv.Close()
+
+		opts := baseOpts(srv.URL)
+		opts.TLSSkipVerify = true
+		opts.TLSMaxVersion = tls.VersionTLS12
+		res := runProbe(t, opts)
+		if res.FailureReason != probe.ReasonTLSError {
+			t.Fatalf("reason = %q, want tls_error", res.FailureReason)
+		}
+	})
+
+	t.Run("server hangs up", func(t *testing.T) {
+		t.Parallel()
+
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("listening: %v", err)
+		}
+		t.Cleanup(func() { _ = ln.Close() })
+		go func() {
+			for {
+				conn, aerr := ln.Accept()
+				if aerr != nil {
+					return
+				}
+				_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+				_, _ = conn.Read(make([]byte, 4096))
+				_ = conn.Close()
+			}
+		}()
+
+		opts := baseOpts("https://" + ln.Addr().String() + "/")
+		opts.TLSSkipVerify = true
+		res := runProbe(t, opts)
+		if res.FailureReason != probe.ReasonTLSError {
+			t.Fatalf("reason = %q, want tls_error", res.FailureReason)
+		}
+	})
 }
 
 // TestMaxBodyBytesBoundsSocketRead verifies the cap bounds bytes read off the
