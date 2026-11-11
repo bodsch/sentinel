@@ -470,6 +470,9 @@ func (p *Prober) run(ctx context.Context) (*Diagnostics, probe.Timings, probe.Fa
 				diag.FinalURL = current
 				return diag, timings, p.tlsReason
 			}
+			if hsErr := tr.handshakeError(); hsErr != nil {
+				return diag, timings, probe.ClassifyHandshakeError(hsErr)
+			}
 			return diag, timings, probe.ClassifyNetworkError(err)
 		}
 

@@ -326,8 +326,17 @@ func TestProbeMaxVersion(t *testing.T) {
 		opts.Roots = ca.pool
 		opts.MaxVersion = tls.VersionTLS12
 
-		if res := runProbe(t, opts); res.Success {
+		res := runProbe(t, opts)
+		if res.Success {
 			t.Fatal("probe succeeded although the server requires TLS 1.3")
+		}
+		// The server answers with a protocol_version alert: a TLS failure,
+		// not a network one.
+		if res.FailureReason != probe.ReasonTLSError {
+			t.Errorf("reason = %q, want tls_error", res.FailureReason)
+		}
+		if res.TimeoutPhase != probe.PhaseNone {
+			t.Errorf("timeout phase = %q, want none", res.TimeoutPhase)
 		}
 	})
 
@@ -471,6 +480,73 @@ func TestProbePlaintextPort(t *testing.T) {
 	if res.FailureReason != probe.ReasonTLSError {
 		t.Errorf("reason = %q, want tls_error", res.FailureReason)
 	}
+}
+
+// TestProbeHandshakeRefused covers servers that refuse the handshake after the
+// TCP connection succeeded — by alert or by hanging up on the ClientHello. Both
+// are TLS failures; reporting them as network_error would point the operator
+// at the network instead of the server's TLS configuration.
+func TestProbeHandshakeRefused(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no shared cipher suite", func(t *testing.T) {
+		t.Parallel()
+
+		ca := newAuthority(t, "Sentinel Probe Test CA")
+		cfg := serverConfig(ca.issue(t, leafOptions{}))
+		cfg.MaxVersion = tls.VersionTLS12
+		// A CBC-SHA256 suite crypto/tls never offers by default.
+		cfg.CipherSuites = []uint16{tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256, tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256}
+		srv := newTestServer(t, cfg)
+
+		opts := baseOptions(srv)
+		opts.Roots = ca.pool
+		res := runProbe(t, opts)
+		if res.FailureReason != probe.ReasonTLSError {
+			t.Errorf("reason = %q, want tls_error", res.FailureReason)
+		}
+	})
+
+	t.Run("server hangs up", func(t *testing.T) {
+		t.Parallel()
+
+		addr := hangUpServer(t)
+		res := runProbe(t, Options{
+			Name:       "hangup",
+			Host:       addr.IP.String(),
+			Port:       addr.Port,
+			Timeout:    3 * time.Second,
+			SkipVerify: true,
+		})
+		if res.FailureReason != probe.ReasonTLSError {
+			t.Errorf("reason = %q, want tls_error", res.FailureReason)
+		}
+	})
+}
+
+// hangUpServer starts a listener that reads the ClientHello and closes the
+// connection without answering, as a server does that rejects the offered
+// versions without sending an alert.
+func hangUpServer(t *testing.T) *net.TCPAddr {
+	t.Helper()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listening: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			conn, aerr := ln.Accept()
+			if aerr != nil {
+				return
+			}
+			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			_, _ = conn.Read(make([]byte, 4096))
+			_ = conn.Close()
+		}
+	}()
+	return ln.Addr().(*net.TCPAddr)
 }
 
 func TestNewValidatesOptions(t *testing.T) {
