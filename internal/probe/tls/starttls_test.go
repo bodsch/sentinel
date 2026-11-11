@@ -70,7 +70,13 @@ func newStartTLSServer(t *testing.T, cfg *tls.Config, script dialogue) *startTLS
 				}
 				_ = tc.SetReadDeadline(time.Now().Add(2 * time.Second))
 				rest, _ := io.ReadAll(io.LimitReader(tc, 1024))
-				srv.afterTLS <- rest
+				// Only the first goodbyes are of interest; an enumeration opens
+				// many sessions, which must not block on a full channel.
+				select {
+				case srv.afterTLS <- rest:
+				case <-done:
+				default:
+				}
 			}()
 		}
 	}()
