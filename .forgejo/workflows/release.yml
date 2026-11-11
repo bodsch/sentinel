@@ -10,34 +10,179 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    # No leading "v": the tags in this repository are 0.9.0, 1.0.0 and so on,
+    # which is what `git describe` then hands the Makefile as VERSION. The
+    # pattern used to be "v*" and therefore matched nothing that was ever
+    # tagged here — 0.9.0 was built by hand and nobody noticed the workflow had
+    # not run. Do not "fix" this back.
+    tags: ["[0-9]*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Override version (defaults to the dispatched tag name)."
+        required: false
+      # tag:
+      #   description: "Tag to release (e.g. 1.2.3). Required for manual dispatch."
+      #   required: true
+      #   type: string
+
+env:
+  PACKAGE_NAME: sentinel
 
 jobs:
-  release:
+  verify:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Require a release tag
+        run: |
+          case "${{ github.ref }}" in
+            refs/tags/*) echo "Releasing tag '${{ github.ref_name }}'." ;;
+            *) echo "A release must be dispatched on a release tag, not '${{ github.ref }}'."
+               echo "In the Forgejo UI choose the tag under 'Use workflow from'."
+               exit 1 ;;
+          esac
+
+      - name: Checkout repository
+        uses: https://code.forgejo.org/actions/checkout@v4
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: https://code.forgejo.org/actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: true
 
-      - name: Build release binaries
-        # VERSION comes from the tag (e.g. v0.2.0) so the embedded build info is
-        # correct; Commit/BuildDate default from git/date in the Makefile.
-        run: make release VERSION="${{ github.ref_name }}"
+  release:
+    needs: verify
+    runs-on: ubuntu-latest
+    # One job, not a matrix: every platform goes into the same archive.
+    env:
+      # os/arch pairs to build, separated by spaces.
+      PLATFORMS: linux/amd64 linux/arm64
+    steps:
 
-      - name: Checksums
-        run: cd dist && sha256sum sentinel-* > SHA256SUMS
+      - name: Checkout repository
+        uses: https://code.forgejo.org/actions/checkout@v4
 
-      - name: Publish release
-        uses: https://code.forgejo.org/actions/forgejo-release@v2
+      - name: Set up Go
+        uses: https://code.forgejo.org/actions/setup-go@v5
         with:
-          direction: upload
-          url: ${{ github.server_url }}
-          repo: ${{ github.repository }}
-          tag: ${{ github.ref_name }}
-          release-dir: dist
-          token: ${{ secrets.GITHUB_TOKEN }}
+          go-version-file: go.mod
+          cache: true
+
+      - name: Resolve version
+        id: ver
+        run: |
+          version="${{ github.event.inputs.version }}"
+          [ -n "$version" ] || version="${{ github.ref_name }}"
+          case "$version" in
+            *[0-9]*) ;;
+            *) echo "version '$version' does not look like a release version"; exit 1 ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build static binaries
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          set -eu
+          # One directory named like the archive, so unpacking never spills
+          # files into the current directory.
+          pkg="${PACKAGE_NAME}_${{ steps.ver.outputs.version }}"
+          build_date="$(date -u +%d.%m.%Y)"
+          mkdir -p "dist/${pkg}"
+          LDFLAGS="-s -w -X main.version=${{ steps.ver.outputs.version }} -X main.buildDate=${build_date}"
+          for platform in ${PLATFORMS}; do
+            os="${platform%/*}"; arch="${platform#*/}"
+            out="dist/${pkg}/${PACKAGE_NAME}-${os}-${arch}"
+            echo "building ${out}"
+            GOOS="${os}" GOARCH="${arch}" go build \
+              -trimpath \
+              -ldflags "${LDFLAGS}" \
+              -o "${out}" ./cmd/sentinel
+          done
+          echo "PKG=${pkg}" >> "$GITHUB_ENV"
+
+      - name: Bundle release archive
+        run: |
+          set -eu
+          install --mode=0644 \
+            config.example.yaml \
+            README.md \
+            "dist/${PKG}/"
+          # Ownership, order and timestamps come from the tagged commit, not
+          # from the runner, so rebuilding a tag yields the same archive.
+          mtime="$(git log -1 --format=%cI)"
+          tar \
+            --sort=name \
+            --owner=0 \
+            --group=0 \
+            --numeric-owner \
+            --mtime="${mtime}" \
+            --directory dist \
+            -cf - "${PKG}" | gzip -n -9 > "dist/${PKG}.tar.gz"
+          #
+          # Checksum in sha256sum format with the bare file name, so
+          # `sha256sum -c sentinel_X.tar.gz.sha256` works next to the download.
+          ( cd dist && sha256sum "${PKG}.tar.gz" > "${PKG}.tar.gz.sha256" )
+          tar --list \
+            --gzip \
+            --verbose \
+            --file \
+            "dist/${PKG}.tar.gz"
+          cat "dist/${PKG}.tar.gz.sha256"
+
+      - name: Publish to Forgejo generic registry
+        env:
+          RUNNER_TOKEN: ${{ secrets.RUNNER_TOKEN }}
+        run: |
+          set -eu
+          if [ -z "${RUNNER_TOKEN:-}" ]; then
+            echo "RUNNER_TOKEN secret is not set"; exit 1
+          fi
+          base="${{ github.server_url }}/api/packages/${{ github.repository_owner }}/generic/${PACKAGE_NAME}/${{ steps.ver.outputs.version }}"
+          for file in "${PKG}.tar.gz" "${PKG}.tar.gz.sha256"; do
+            echo "Uploading ${file} -> ${base}/${file}"
+            code="$(curl \
+                --silent \
+                --show-error \
+                --output /dev/null \
+                --write-out '%{http_code}' \
+                --user "${{ github.actor }}:${RUNNER_TOKEN}" \
+                --upload-file "dist/${file}" \
+                "${base}/${file}")"
+            case "$code" in
+              201) echo "  created" ;;
+              409) echo "  already exists (409) - delete it first to re-publish"; exit 1 ;;
+              *)   echo "  upload failed with HTTP ${code}"; exit 1 ;;
+            esac
+          done
+
+
+  # release:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4
+  #
+  #     - name: Set up Go
+  #       uses: actions/setup-go@v5
+  #       with:
+  #         go-version-file: go.mod
+  #
+  #     - name: Build release binaries
+  #       # VERSION comes from the tag (e.g. v0.2.0) so the embedded build info is
+  #       # correct; Commit/BuildDate default from git/date in the Makefile.
+  #       run: make release VERSION="${{ github.ref_name }}"
+  #
+  #     - name: Checksums
+  #       run: cd dist && sha256sum sentinel-* > SHA256SUMS
+  #
+  #     - name: Publish release
+  #       uses: https://code.forgejo.org/actions/forgejo-release@v2
+  #       with:
+  #         direction: upload
+  #         url: ${{ github.server_url }}
+  #         repo: ${{ github.repository }}
+  #         tag: ${{ github.ref_name }}
+  #         release-dir: dist
+  #         token: ${{ secrets.GITHUB_TOKEN }}
